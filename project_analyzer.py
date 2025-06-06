@@ -544,7 +544,20 @@ def main():
         json_output=args.json,
         coverage_data=coverage_report
     )
-    print(final_output)
+      # Fix Unicode encoding issue on Windows
+    try:
+        print(final_output)
+    except UnicodeEncodeError:
+        # Fallback to writing directly to stdout with UTF-8 encoding
+        import sys
+        if hasattr(sys.stdout, 'buffer'):
+            sys.stdout.buffer.write(final_output.encode('utf-8', errors='replace'))
+            sys.stdout.buffer.write(b'\n')
+        else:
+            # For older Python versions or special cases
+            import os
+            os.system('chcp 65001 >nul 2>&1')  # Set console to UTF-8 on Windows
+            print(final_output.encode('utf-8', errors='replace').decode('utf-8', errors='replace'))
 
 def remove_ansi_colors(text):
     """Remove ANSI color codes from text."""
