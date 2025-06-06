@@ -16,7 +16,7 @@ A powerful, free command-line tool that analyzes your project structure, provide
 
 ### Prerequisites
 
-- Python 3.7+
+- Python 3.8+
 - Google API key (for AI features)
 
 ### Installation
