@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Supports both relative and absolute path handling
 - Cross-platform compatibility (Windows, macOS, Linux)
 
+## [1.0.1] - 2025-06-06
+
+### Improved
+- Source directory discovery is now fully recursive: all configured source directories (e.g., `src`, `app`, `main`) are found at any depth in the project tree, not just at the top level. This makes file prioritization for AI analysis and reporting much more robust, especially for monorepos and complex project structures.
+- The `_find_all_source_dirs` helper function was introduced for clean, efficient, and robust recursive source directory detection, following the Single Responsibility Principle.
+- Directory pruning in `os.walk` now ensures ignored directories (like `node_modules`, `.git`, etc.) are efficiently skipped, improving performance on large projects.
+- Fallback logic ensures that if no configured source directories are found, the analyzer safely analyzes the whole project, making it adaptable to any project layout.
+- General code quality improvements and additional comments for maintainability.
+
+### Notes
+- This release marks the script as feature-complete and production-ready for its current scope. Future enhancements may include parallel execution or richer HTML reports, but the core tool is now robust and reliable for daily use.
+
 ---
 
 ## Release Notes Format
