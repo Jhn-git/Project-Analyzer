@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Source directory discovery is now fully recursive: all configured source directories (e.g., `src`, `app`, `main`) are found at any depth in the project tree, not just at the top level. This makes file prioritization for AI analysis and reporting much more robust, especially for monorepos and complex project structures.
 - General robustness and code quality improvements, including better error handling and configuration management.
 
+### Fixed
+- Bug in top script file selection: The analyzer now correctly selects the top script file from each discovered source directory (e.g., `src`, `app`, `main`) instead of only the first one found. This ensures all relevant code is considered for AI analysis and reporting, especially in monorepos or multi-package projects.
+
 ## [1.0.0] - 2025-06-06
 
 ### Added

@@ -290,13 +290,19 @@ def _find_all_source_dirs(root_path, source_dirs, ignore_patterns, base_dir, con
     return matches
 
 def _find_top_script_files(directory, ignore_patterns, base_dir, count=3, config=None):
-    script_files = []
     source_dirs = get_configured_source_dirs(config)
     # Recursively find all source dirs at any depth
     all_source_dirs = _find_all_source_dirs(directory, source_dirs, ignore_patterns, base_dir, config)
-    search_paths = all_source_dirs if all_source_dirs else [Path(directory)]
+    # NEW LOGIC: We'll store the top file found for each source directory
+    top_files_per_dir = {str(path): (0, 0, None) for path in all_source_dirs} # {path: (score, lines, filepath)}
+
+    if not all_source_dirs:
+        # Fallback to old logic if no specific source dirs are found
+        print(f"{YELLOW}Warning: No 'src' directories found. Analyzing project root as a fallback.{RESET}")
+        return []
+
     now = time.time()
-    for search_path in search_paths:
+    for search_path in all_source_dirs:
         for root, dirs, files in os.walk(search_path):
             dirs[:] = [d for d in dirs if not should_ignore(os.path.join(root, d), ignore_patterns, base_dir, config)]
             for name in files:
@@ -306,27 +312,28 @@ def _find_top_script_files(directory, ignore_patterns, base_dir, count=3, config
                 ext = Path(name).suffix
                 if ext in SCRIPT_EXTS:
                     line_count = count_lines(file_path)
-                    # Priority scoring
+                    # --- Scoring logic (remains the same) ---
                     rel_path = str(Path(file_path).relative_to(directory))
                     score = 0
-                    # Source dir boost
-                    if any(part in source_dirs for part in Path(rel_path).parts):
-                        score += 30
-                    # Penalize test/docs/archive
-                    if any(part in {"test", "tests", "docs", "archived"} for part in Path(rel_path).parts):
-                        score -= 20
-                    # Recency boost (last 7 days)
+                    if any(part in source_dirs for part in Path(rel_path).parts): score += 30
+                    if any(part in {"test", "tests", "docs", "archived"} for part in Path(rel_path).parts): score -= 20
                     try:
-                        mtime = os.path.getmtime(file_path)
-                        if now - mtime < 7*24*3600:
-                            score += 15
-                    except Exception:
-                        pass
-                    # Size as tiebreaker
+                        if now - os.path.getmtime(file_path) < 7*24*3600: score += 15
+                    except Exception: pass
                     score += min(line_count // 10, 10)
-                    script_files.append((score, line_count, file_path))
-    script_files.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return [(line_count, file_path) for _, line_count, file_path in script_files[:count]]
+                    # --- NEW SELECTION LOGIC ---
+                    # Check if this file is the new top file for its source directory
+                    current_top_score = top_files_per_dir[str(search_path)][0]
+                    if score > current_top_score:
+                        top_files_per_dir[str(search_path)] = (score, line_count, file_path)
+    # Collect the results from our dictionary
+    final_files = []
+    for _, line_count, file_path in top_files_per_dir.values():
+        if file_path: # Ensure a file was actually found for that dir
+            final_files.append((line_count, file_path))
+    # Sort by line count just for consistent output order
+    final_files.sort(key=lambda item: item[0], reverse=True)
+    return final_files
 
 # --- Enhanced LLM prompt with file metadata and project context ---
 def _run_llm_analysis_on_top_files(directory, system_prompt, output_label, schema=None, config=None):
