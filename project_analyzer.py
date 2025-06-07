@@ -10,6 +10,7 @@ import requests  # For LLM API calls
 import google.generativeai as genai
 from dotenv import load_dotenv
 from pathlib import Path
+import threading
 
 # ANSI escape sequences for colored output
 RESET = "\033[0m"
@@ -31,12 +32,15 @@ SCRIPT_EXTS = {
 DATA_EXTS = {
     '.json', '.csv', '.yml', '.yaml', '.xml', '.txt', '.md', '.ini', '.conf', '.log'
 }
-EXCLUDED_DIRS = {"node_modules", ".git", ".vscode", ".idea", "dist", "coverage", "__pycache__"}
+EXCLUDED_DIRS = {"node_modules", ".git", ".vscode", ".idea", "dist", "coverage", "venv", ".venv", "__pycache__"}
 SOURCE_CODE_DIRS = {"src", "app", "main"} # Common names for source directories
 
 PROJECT_ROOT = os.getcwd()
+CACHE_FILE = os.path.join(PROJECT_ROOT, ".analyzer-cache.json")
+CONFIG_FILE = os.path.join(PROJECT_ROOT, ".analyzer-config.json")
+_cache_lock = threading.Lock()
 
-def parse_gitignore(directory):
+def parse_gitignore(directory, config=None):
     gitignore_path = Path(directory) / ".gitignore"
     ignore_patterns = set()
     if gitignore_path.exists():
@@ -48,9 +52,11 @@ def parse_gitignore(directory):
                         ignore_patterns.add(line)
         except (OSError, IOError):
             pass
+    if config:
+        ignore_patterns.update(get_configured_exclude_patterns(config))
     return ignore_patterns
 
-def should_ignore(path_str: str, gitignore_patterns: set, base_dir: str) -> bool:
+def should_ignore(path_str: str, gitignore_patterns: set, base_dir: str, config=None) -> bool:
     """
     Checks if a file or directory should be ignored.
     This is the most critical function for getting a clean report.
@@ -59,7 +65,8 @@ def should_ignore(path_str: str, gitignore_patterns: set, base_dir: str) -> bool
         relative_path = Path(path_str).relative_to(base_dir)
     except ValueError:
         return True
-    if any(part in EXCLUDED_DIRS for part in relative_path.parts):
+    excluded_dirs = get_configured_excluded_dirs(config) if config else EXCLUDED_DIRS
+    if any(part in excluded_dirs for part in relative_path.parts):
         return True
     for pattern in gitignore_patterns:
         if fnmatch.fnmatch(str(relative_path), pattern) or fnmatch.fnmatch(relative_path.name, pattern):
@@ -210,46 +217,160 @@ def call_llm(prompt_messages, json_schema=None):
         return f'{{"error": "Error calling Google Gemini API: {str(e)}"}}'
 
 
-def _find_top_script_files(directory, count=3):
-    """Helper to find the largest script files BY LINE COUNT within the primary source directories."""
-    script_files = []
-    # NEW: Determine which source directories exist in the project
-    search_paths = [Path(directory) / d for d in SOURCE_CODE_DIRS if (Path(directory) / d).is_dir()]
-    # If no standard source folders are found, default to the project root as a fallback
-    if not search_paths:
-        search_paths = [Path(directory)]
-    print(f"{GREY}  (Analyzing files in: {[str(p.relative_to(directory)) for p in search_paths]}){RESET}")
-    for search_path in search_paths:
-        for root, _, files in os.walk(search_path):
-            for name in files:
-                if Path(name).suffix in SCRIPT_EXTS:
-                    file_path = os.path.join(root, name)
-                    line_count = count_lines(file_path)
-                    script_files.append((line_count, file_path))
-    script_files.sort(key=lambda item: item[0], reverse=True)
-    return script_files[:count]
+def load_cache():
+    if not os.path.exists(CACHE_FILE):
+        return {}
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
-def _run_llm_analysis_on_top_files(directory, system_prompt, output_label, schema=None):
+def save_cache(cache):
+    with _cache_lock:
+        try:
+            with open(CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(cache, f, indent=2)
+        except Exception:
+            pass
+
+def get_file_md5(file_path):
+    hash_md5 = hashlib.md5()
+    try:
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+    except Exception:
+        return None
+
+# --- Config file support ---
+def load_config():
+    if not os.path.exists(CONFIG_FILE):
+        return {}
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+# --- Overrideable globals ---
+def get_configured_source_dirs(config):
+    return set(config.get("source_dirs", ["src", "app", "main"]))
+
+
+def get_configured_excluded_dirs(config):
+    return set(config.get("exclude_dirs", [
+        "node_modules", ".git", ".vscode", ".idea", "dist", "coverage", "venv", ".venv", "__pycache__"
+    ]))
+
+
+def get_configured_exclude_patterns(config):
+    return set(config.get("exclude_patterns", []))
+
+
+def get_configured_llm_review_file_count(config):
+    return int(config.get("llm_review_file_count", 3))
+
+# --- Smarter file prioritization ---
+import time
+
+def _find_all_source_dirs(root_path, source_dirs, ignore_patterns, base_dir, config=None):
+    """
+    Recursively find all directories matching any of the names in source_dirs, at any depth.
+    Returns a list of Path objects.
+    """
+    matches = []
+    for dirpath, dirnames, _ in os.walk(root_path):
+        # Remove ignored directories in-place
+        dirnames[:] = [d for d in dirnames if not should_ignore(os.path.join(dirpath, d), ignore_patterns, base_dir, config)]
+        for d in dirnames:
+            if d in source_dirs:
+                matches.append(Path(dirpath) / d)
+    return matches
+
+def _find_top_script_files(directory, ignore_patterns, base_dir, count=3, config=None):
+    script_files = []
+    source_dirs = get_configured_source_dirs(config)
+    # Recursively find all source dirs at any depth
+    all_source_dirs = _find_all_source_dirs(directory, source_dirs, ignore_patterns, base_dir, config)
+    search_paths = all_source_dirs if all_source_dirs else [Path(directory)]
+    now = time.time()
+    for search_path in search_paths:
+        for root, dirs, files in os.walk(search_path):
+            dirs[:] = [d for d in dirs if not should_ignore(os.path.join(root, d), ignore_patterns, base_dir, config)]
+            for name in files:
+                file_path = os.path.join(root, name)
+                if should_ignore(file_path, ignore_patterns, base_dir, config):
+                    continue
+                ext = Path(name).suffix
+                if ext in SCRIPT_EXTS:
+                    line_count = count_lines(file_path)
+                    # Priority scoring
+                    rel_path = str(Path(file_path).relative_to(directory))
+                    score = 0
+                    # Source dir boost
+                    if any(part in source_dirs for part in Path(rel_path).parts):
+                        score += 30
+                    # Penalize test/docs/archive
+                    if any(part in {"test", "tests", "docs", "archived"} for part in Path(rel_path).parts):
+                        score -= 20
+                    # Recency boost (last 7 days)
+                    try:
+                        mtime = os.path.getmtime(file_path)
+                        if now - mtime < 7*24*3600:
+                            score += 15
+                    except Exception:
+                        pass
+                    # Size as tiebreaker
+                    score += min(line_count // 10, 10)
+                    script_files.append((score, line_count, file_path))
+    script_files.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [(line_count, file_path) for _, line_count, file_path in script_files[:count]]
+
+# --- Enhanced LLM prompt with file metadata and project context ---
+def _run_llm_analysis_on_top_files(directory, system_prompt, output_label, schema=None, config=None):
     print(f"\n{BOLD}--- LLM-Powered {output_label} ---{RESET}")
-    top_files = _find_top_script_files(directory)
+    base_dir = directory
+    ignore_patterns = parse_gitignore(base_dir, config)
+    top_files = _find_top_script_files(directory, ignore_patterns, base_dir, count=get_configured_llm_review_file_count(config), config=config)
     if not top_files:
         print(f"{GREY}No script files found to analyze.{RESET}")
         return
+    cache = load_cache()
+    cache_updated = False
+    project_context = config.get("project_context") if config else None
+    if not project_context:
+        project_context = "This file is part of a software project."
     for idx, (line_count, file_path) in enumerate(top_files, 1):
         print(f"\n{BOLD}File {idx}: {os.path.relpath(file_path, directory)} ({line_count} lines){RESET}")
-        try:
-            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                code = f.read(4000)
-        except Exception as e:
-            print(f"{RED}Could not read file: {e}{RESET}")
-            continue
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": code}
-        ]
-        # --- Provide feedback to the user before the long wait ---
-        print(f"{GREY}  -> Sending to LLM for {output_label}. This may take a few minutes...{RESET}")
-        response_str = call_llm(messages, json_schema=schema)
+        file_hash = get_file_md5(file_path)
+        cache_key = f"{file_path}|{file_hash}|{output_label}"
+        cached_result = cache.get(cache_key)
+        if cached_result:
+            print(f"{GREY}  -> Using cached {output_label} result.{RESET}")
+            response_str = cached_result
+        else:
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    code = f.read(4000)
+            except Exception as e:
+                print(f"{RED}Could not read file: {e}{RESET}")
+                continue
+            user_prompt = (
+                f"Please analyze the following file.\n\n"
+                f"**File Path:** `{os.path.relpath(file_path, directory)}`\n\n"
+                f"**Project Context:** {project_context}\n\n"
+                f"**File Content:**\n\n```{Path(file_path).suffix[1:] or 'txt'}\n{code}\n```"
+            )
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+            print(f"{GREY}  -> Sending to LLM for {output_label}. This may take a few minutes...{RESET}")
+            response_str = call_llm(messages, json_schema=schema)
+            cache[cache_key] = response_str
+            cache_updated = True
         # --- Robust JSON Extraction Layer ---
         cleaned_json_str = None
         match = re.search(r'```(?:json)?\s*({.*})\s*```', response_str, re.DOTALL)
@@ -279,16 +400,18 @@ def _run_llm_analysis_on_top_files(directory, system_prompt, output_label, schem
             print(f"{GREY}--- Raw LLM Output ---{RESET}")
             print(response_str)
             print(f"{GREY}------------------------{RESET}")
+    if cache_updated:
+        save_cache(cache)
 
-def run_llm_summarization(directory):
+def run_llm_summarization(directory, config=None):
     system_prompt = (
         "You are a senior software architect. Your task is to summarize the following code file in 2-3 sentences. "
         "Focus on its primary responsibility, its main inputs, and its key outputs or side effects. "
         "Respond ONLY with a JSON object matching the provided schema."
     )
-    _run_llm_analysis_on_top_files(directory, system_prompt, "Summary", CODE_SUMMARY_SCHEMA)
+    _run_llm_analysis_on_top_files(directory, system_prompt, "Summary", CODE_SUMMARY_SCHEMA, config=config)
 
-def run_llm_code_review(directory):
+def run_llm_code_review(directory, config=None):
     system_prompt = (
         "You are a code review expert specializing in clean code principles. Analyze the following code. "
         "Identify potential code smells such as long functions, high cyclomatic complexity, tight coupling, or poor naming. "
@@ -296,7 +419,7 @@ def run_llm_code_review(directory):
         "If there are no obvious smells, say 'Code looks clean.' "
         "Respond ONLY with a JSON object matching the provided schema."
     )
-    _run_llm_analysis_on_top_files(directory, system_prompt, "Review", CODE_REVIEW_SCHEMA)
+    _run_llm_analysis_on_top_files(directory, system_prompt, "Review", CODE_REVIEW_SCHEMA, config=config)
 
 # --- Main universal analysis (get_file_structure) ---
 def get_file_structure(directory, ignore_patterns=None, markdown=False, json_output=False, coverage_data=None):
@@ -512,7 +635,10 @@ def main():
     parser.add_argument('--coverage', action='store_true', help='Run test coverage analysis if possible')
     parser.add_argument('--summarize', action='store_true', help='Use local LLM to summarize key files')
     parser.add_argument('--review', action='store_true', help='Use local LLM to review key files for code smells')
+    parser.add_argument('--html-report', action='store_true', help='Generate an HTML report')
     args = parser.parse_args()
+
+    config = load_config()
 
     # NEW: Configure Gemini at the start if LLM is needed
     if args.summarize or args.review:
@@ -520,7 +646,7 @@ def main():
             sys.exit(1)
 
     directory = PROJECT_ROOT
-    ignore_patterns = parse_gitignore(directory)
+    ignore_patterns = parse_gitignore(directory, config)
 
     coverage_report = None
     if args.coverage:
@@ -530,11 +656,11 @@ def main():
             print(f"{GREY}(No supported test coverage found for this project.){RESET}")
 
     if args.summarize:
-        run_llm_summarization(directory)
+        run_llm_summarization(directory, config=config)
         return
 
     if args.review:
-        run_llm_code_review(directory)
+        run_llm_code_review(directory, config=config)
         return
 
     final_output = get_file_structure(
@@ -544,20 +670,75 @@ def main():
         json_output=args.json,
         coverage_data=coverage_report
     )
-      # Fix Unicode encoding issue on Windows
+    print(final_output)
+
+    # --- HTML Report Generation ---
+    if args.html_report:
+        try:
+            generate_html_report(directory, final_output, config, coverage_report)
+        except Exception as e:
+            print(f"{RED}Failed to generate HTML report: {e}{RESET}")
+
+# --- HTML Report Generation ---
+from datetime import datetime
+
+def generate_html_report(directory, text_output, config, coverage_report):
     try:
-        print(final_output)
-    except UnicodeEncodeError:
-        # Fallback to writing directly to stdout with UTF-8 encoding
-        import sys
-        if hasattr(sys.stdout, 'buffer'):
-            sys.stdout.buffer.write(final_output.encode('utf-8', errors='replace'))
-            sys.stdout.buffer.write(b'\n')
-        else:
-            # For older Python versions or special cases
-            import os
-            os.system('chcp 65001 >nul 2>&1')  # Set console to UTF-8 on Windows
-            print(final_output.encode('utf-8', errors='replace').decode('utf-8', errors='replace'))
+        from jinja2 import Template
+    except ImportError:
+        print(f"{RED}Jinja2 is required for HTML report generation. Install with 'pip install jinja2'.{RESET}")
+        return
+    html_template = '''
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Project Analyzer Report</title>
+        <style>
+            body { font-family: Arial, sans-serif; background: #f8f8f8; color: #222; }
+            .container { max-width: 900px; margin: 2em auto; background: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 2px 8px #0001; }
+            h1 { color: #2d5be3; }
+            pre { background: #f4f4f4; padding: 1em; border-radius: 6px; overflow-x: auto; }
+            .section { margin-bottom: 2em; }
+            .coverage { background: #e8f5e9; padding: 1em; border-radius: 6px; }
+            .timestamp { color: #888; font-size: 0.9em; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Project Analyzer Report</h1>
+            <div class="timestamp">Generated: {{ timestamp }}</div>
+            <div class="section">
+                <h2>File Tree & Stats</h2>
+                <pre>{{ file_tree }}</pre>
+            </div>
+            {% if coverage %}
+            <div class="section coverage">
+                <h2>Test Coverage</h2>
+                <pre>{{ coverage }}</pre>
+            </div>
+            {% endif %}
+            {% if config %}
+            <div class="section">
+                <h2>Analyzer Config</h2>
+                <pre>{{ config }}</pre>
+            </div>
+            {% endif %}
+        </div>
+    </body>
+    </html>
+    '''
+    template = Template(html_template)
+    html = template.render(
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        file_tree=remove_ansi_colors(text_output),
+        coverage=remove_ansi_colors(coverage_report) if coverage_report else None,
+        config=json.dumps(config, indent=2) if config else None
+    )
+    out_path = os.path.join(directory, "analyzer-report.html")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"{GREEN}HTML report generated at: {out_path}{RESET}")
 
 def remove_ansi_colors(text):
     """Remove ANSI color codes from text."""

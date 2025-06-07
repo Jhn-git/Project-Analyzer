@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Contributing guidelines
 - Requirements.txt for easy installation
 
+### Improved
+- Source directory discovery is now fully recursive: all configured source directories (e.g., `src`, `app`, `main`) are found at any depth in the project tree, not just at the top level. This makes file prioritization for AI analysis and reporting much more robust, especially for monorepos and complex project structures.
+- General robustness and code quality improvements, including better error handling and configuration management.
+
 ## [1.0.0] - 2025-06-06
 
 ### Added

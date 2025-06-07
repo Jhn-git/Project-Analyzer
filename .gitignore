@@ -148,3 +148,4 @@ Thumbs.db
 test_output/
 *.tmp
 *.temp
+.github/instructions/*
