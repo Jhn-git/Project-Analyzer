@@ -4,6 +4,10 @@
 > - For a quick usage reference, see [USAGE.md](./USAGE.md)
 > - For contribution guidelines, see [CONTRIBUTING.md](./CONTRIBUTING.md)
 
+Yes, project_analyzer.py is a single, massive file.
+And yes, the analyzer flags its own size as a (!!! TOO LARGE !!!) issue every time it runs. We consider this a feature, not a bug.
+It is the ultimate, unbiased proof that the sniffer works. The cobbler's children have no shoes, and our analyzer is its own first and most honest user.
+
 A powerful, free command-line tool that analyzes your project structure, provides test coverage insights, and uses AI to review your code quality. Perfect for developers who want to quickly understand and improve their codebases.
 
 ## ✨ Features
