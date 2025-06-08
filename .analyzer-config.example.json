@@ -1,0 +1,66 @@
+{
+  "source_dirs": ["src", "app", "main"],
+  "exclude_dirs": [
+    "node_modules", ".git", ".vscode", ".idea", "dist", "coverage", 
+    "venv", ".venv", "__pycache__", "build", "target"
+  ],
+  "exclude_patterns": [
+    "*.log",
+    "*.tmp",
+    "coverage/**/*"
+  ],
+  "untestable_patterns": [
+    "scripts/**/*.sh",
+    "scripts/**/*.bat",
+    "*.config.js",
+    "*.config.ts",
+    "webpack.config.*",
+    "vite.config.*",
+    "rollup.config.*",
+    "babel.config.*",
+    "jest.config.*",
+    "setup.py",
+    "manage.py",
+    "**/*.d.ts"
+  ],
+  "utility_patterns": [
+    "src/utils/**/*",
+    "src/lib/**/*",
+    "src/config.*",
+    "src/constants.*",
+    "**/*logger*",
+    "**/*utils*",
+    "**/*helpers*"
+  ],
+  "test_patterns": [
+    "**/test_*.py",
+    "**/tests/*.py", 
+    "**/*_test.py",
+    "**/*.test.js",
+    "**/*.test.ts",
+    "**/*.spec.js",
+    "**/*.spec.ts",
+    "**/tests/*.js",
+    "**/tests/*.ts",
+    "**/__tests__/**/*"
+  ],
+  "llm_review_file_count": 3,
+  "blast_radius_threshold": 10,
+  "stale_test_threshold_days": 30,
+  "stale_logic_threshold_days": 365,
+  "high_churn_threshold": 10,
+  "high_churn_days": 30,
+  "features_path": "src/features/",
+  "architecture_rules": [
+    {
+      "layer": "domain",
+      "path": "src/domain/",
+      "cannot_be_imported_by": ["infrastructure", "presentation"]
+    },
+    {
+      "layer": "application", 
+      "path": "src/application/",
+      "cannot_be_imported_by": ["infrastructure", "presentation"]
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 # Contributing to Project Analyzer
 
+> **For general usage instructions, see [README.md](./README.md). For a quick usage reference, see [USAGE.md](./USAGE.md).**
+
 Thank you for your interest in contributing to Project Analyzer! This document provides guidelines and information for contributors.
 
 ## 🚀 Getting Started

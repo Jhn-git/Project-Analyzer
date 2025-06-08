@@ -1,5 +1,9 @@
 # Project Analyzer 🔍
 
+> **Documentation Overview:**
+> - For a quick usage reference, see [USAGE.md](./USAGE.md)
+> - For contribution guidelines, see [CONTRIBUTING.md](./CONTRIBUTING.md)
+
 A powerful, free command-line tool that analyzes your project structure, provides test coverage insights, and uses AI to review your code quality. Perfect for developers who want to quickly understand and improve their codebases.
 
 ## ✨ Features

@@ -148,4 +148,5 @@ Thumbs.db
 test_output/
 *.tmp
 *.temp
+.analyzer-cache.json
 .github/instructions/*

@@ -1,5 +1,7 @@
 # Quick Usage Guide
 
+> **See [README.md](./README.md) for full documentation, features, and troubleshooting.**
+
 This is a quick reference for using Project Analyzer.
 
 ## Installation
