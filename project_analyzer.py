@@ -24,6 +24,7 @@ import subprocess
 import hashlib
 import ast
 import time
+import glob
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -480,6 +481,7 @@ class ArchitecturalSniffer:
         self.config = config or {}
         self.dependency_graph = DependencyGraph()
         self.smells = []
+        self._workspace_packages = None  # Cache for workspace package mappings
         
     def analyze_architecture(self, file_paths):
         """Run all architectural analyses."""
@@ -510,7 +512,7 @@ class ArchitecturalSniffer:
                         self.dependency_graph.add_dependency(file_path, resolved_path)
     
     def _resolve_import_path(self, import_name, from_file):
-        """Resolve an import name to an actual file path with enhanced config support."""
+        """Resolve an import name to an actual file path with enhanced config and workspace support."""
         from_dir = Path(from_file).parent
         
         # Handle relative imports
@@ -520,6 +522,79 @@ class ArchitecturalSniffer:
                 candidate = resolved.parent / (resolved.name + ext)
                 if candidate.exists():
                     return str(candidate)
+        
+        # Check for workspace package imports
+        workspace_packages = self._get_workspace_packages()
+        if workspace_packages and import_name in workspace_packages:
+            package_dir = Path(workspace_packages[import_name])
+            
+            # Look for main entry points in package
+            entry_points = ['index.js', 'index.ts', 'index.tsx', 'index.jsx', 'index.py']
+            for entry_point in entry_points:
+                candidate = package_dir / entry_point
+                if candidate.exists():
+                    return str(candidate)
+            
+            # Check package.json for main field
+            package_json_path = package_dir / 'package.json'
+            if package_json_path.exists():
+                try:
+                    with open(package_json_path, 'r', encoding='utf-8') as f:
+                        package_data = json.load(f)
+                    
+                    main_field = package_data.get('main', 'index.js')
+                    main_file = package_dir / main_field
+                    if main_file.exists():
+                        return str(main_file)
+                        
+                except (json.JSONDecodeError, IOError):
+                    pass
+        
+        # Handle workspace scoped imports (e.g., @workspace/package-name)
+        if '/' in import_name and import_name.startswith('@'):
+            # Check if this is a scoped workspace package
+            for package_name, package_path in workspace_packages.items():
+                if package_name == import_name:
+                    package_dir = Path(package_path)
+                    
+                    # Look for main entry points
+                    entry_points = ['index.js', 'index.ts', 'index.tsx', 'index.jsx', 'index.py']
+                    for entry_point in entry_points:
+                        candidate = package_dir / entry_point
+                        if candidate.exists():
+                            return str(candidate)
+        
+        # Handle workspace package sub-imports (e.g., @workspace/package-name/submodule)
+        if '/' in import_name:
+            parts = import_name.split('/')
+            if len(parts) >= 2:
+                # Try to match against workspace packages
+                if import_name.startswith('@') and len(parts) >= 3:
+                    # Scoped package: @scope/package/submodule
+                    potential_package = '/'.join(parts[:2])  # @scope/package
+                    submodule = '/'.join(parts[2:])          # submodule
+                else:
+                    # Non-scoped package: package/submodule
+                    potential_package = parts[0]             # package
+                    submodule = '/'.join(parts[1:])          # submodule
+                
+                if potential_package in workspace_packages:
+                    package_dir = Path(workspace_packages[potential_package])
+                    submodule_path = package_dir / submodule
+                    
+                    # Try different extensions for the submodule
+                    for ext in ['.py', '.js', '.ts', '.tsx', '.jsx']:
+                        candidate = submodule_path.parent / (submodule_path.name + ext)
+                        if candidate.exists():
+                            return str(candidate)
+                    
+                    # Check if submodule is a directory with index file
+                    if submodule_path.is_dir():
+                        entry_points = ['index.js', 'index.ts', 'index.tsx', 'index.jsx', 'index.py']
+                        for entry_point in entry_points:
+                            candidate = submodule_path / entry_point
+                            if candidate.exists():
+                                return str(candidate)
         
         # Check for TypeScript/JavaScript config files for path aliases
         config_paths = self._get_config_path_aliases()
@@ -569,6 +644,174 @@ class ArchitecturalSniffer:
                     continue
                     
         return config_paths
+    
+    def _get_workspace_packages(self):
+        """Detect and parse workspace packages for monorepo support."""
+        if self._workspace_packages is not None:
+            return self._workspace_packages
+        
+        self._workspace_packages = {}
+        workspace_root = self._find_workspace_root()
+        
+        if not workspace_root:
+            return self._workspace_packages
+        
+        # Parse different workspace types
+        self._parse_yarn_workspaces(workspace_root)
+        self._parse_lerna_packages(workspace_root)
+        self._parse_nx_packages(workspace_root)
+        self._parse_pnpm_workspaces(workspace_root)
+        
+        return self._workspace_packages
+    
+    def _find_workspace_root(self):
+        """Find the workspace root by looking for workspace configuration files."""
+        current_path = Path(self.project_root)
+        
+        # Check current directory and parent directories
+        while current_path != current_path.parent:
+            # Check for various workspace indicators
+            workspace_indicators = [
+                'lerna.json',
+                'nx.json',
+                'pnpm-workspace.yaml',
+                'pnpm-workspace.yml',
+                'yarn.lock'
+            ]
+            
+            for indicator in workspace_indicators:
+                if (current_path / indicator).exists():
+                    return current_path
+            
+            # Check for package.json with workspaces field
+            package_json_path = current_path / 'package.json'
+            if package_json_path.exists():
+                try:
+                    with open(package_json_path, 'r', encoding='utf-8') as f:
+                        package_data = json.load(f)
+                    if 'workspaces' in package_data:
+                        return current_path
+                except (json.JSONDecodeError, IOError):
+                    pass
+            
+            current_path = current_path.parent
+        
+        return None
+    
+    def _parse_yarn_workspaces(self, workspace_root):
+        """Parse Yarn workspaces configuration."""
+        workspace_root = Path(workspace_root)
+        package_json_path = workspace_root / 'package.json'
+        if not package_json_path.exists():
+            return
+        
+        try:
+            with open(package_json_path, 'r', encoding='utf-8') as f:
+                package_data = json.load(f)
+            
+            workspaces = package_data.get('workspaces', [])
+            if isinstance(workspaces, dict):
+                workspaces = workspaces.get('packages', [])
+            
+            for workspace_pattern in workspaces:
+                self._scan_workspace_pattern(workspace_root, workspace_pattern)
+                
+        except (json.JSONDecodeError, IOError):
+            pass
+    
+    def _parse_lerna_packages(self, workspace_root):
+        """Parse Lerna packages configuration."""
+        workspace_root = Path(workspace_root)
+        lerna_json_path = workspace_root / 'lerna.json'
+        if not lerna_json_path.exists():
+            return
+        
+        try:
+            with open(lerna_json_path, 'r', encoding='utf-8') as f:
+                lerna_data = json.load(f)
+            
+            packages = lerna_data.get('packages', ['packages/*'])
+            for package_pattern in packages:
+                self._scan_workspace_pattern(workspace_root, package_pattern)
+                
+        except (json.JSONDecodeError, IOError):
+            pass
+    
+    def _parse_nx_packages(self, workspace_root):
+        """Parse Nx workspace configuration."""
+        workspace_root = Path(workspace_root)
+        nx_json_path = workspace_root / 'nx.json'
+        if not nx_json_path.exists():
+            return
+        
+        # Nx typically uses apps/* and libs/* patterns
+        default_patterns = ['apps/*', 'libs/*', 'packages/*']
+        for pattern in default_patterns:
+            self._scan_workspace_pattern(workspace_root, pattern)
+    
+    def _parse_pnpm_workspaces(self, workspace_root):
+        """Parse pnpm workspace configuration."""
+        workspace_root = Path(workspace_root)
+        for config_file in ['pnpm-workspace.yaml', 'pnpm-workspace.yml']:
+            config_path = workspace_root / config_file
+            if config_path.exists():
+                try:
+                    # Simple YAML parsing for packages list
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    # Extract packages from YAML (basic parsing)
+                    import re
+                    packages_match = re.search(r'packages:\s*\n((?:\s*-\s*.+\n?)*)', content)
+                    if packages_match:
+                        packages_section = packages_match.group(1)
+                        patterns = re.findall(r'-\s*(.+)', packages_section)
+                        for pattern in patterns:
+                            pattern = pattern.strip().strip('"\'')
+                            self._scan_workspace_pattern(workspace_root, pattern)
+                            
+                except IOError:
+                    pass
+                break
+    
+    def _scan_workspace_pattern(self, workspace_root, pattern):
+        """Scan for packages matching a workspace pattern."""
+        try:
+            # Handle glob patterns
+            if '*' in pattern:
+                full_pattern = str(workspace_root / pattern)
+                matched_dirs = glob.glob(full_pattern)
+                
+                for matched_dir in matched_dirs:
+                    matched_path = Path(matched_dir)
+                    if matched_path.is_dir():
+                        self._add_package_from_directory(matched_path)
+            else:
+                # Direct directory reference
+                package_dir = workspace_root / pattern
+                if package_dir.is_dir():
+                    self._add_package_from_directory(package_dir)
+                    
+        except Exception:
+            # Ignore glob/pattern errors
+            pass
+    
+    def _add_package_from_directory(self, package_dir):
+        """Add a package from a directory by reading its package.json."""
+        package_json_path = package_dir / 'package.json'
+        if not package_json_path.exists():
+            return
+        
+        try:
+            with open(package_json_path, 'r', encoding='utf-8') as f:
+                package_data = json.load(f)
+            
+            package_name = package_data.get('name')
+            if package_name:
+                self._workspace_packages[package_name] = str(package_dir)
+                
+        except (json.JSONDecodeError, IOError):
+            pass
     
     def _check_boundary_violations(self):
         """Check for architectural boundary violations."""
@@ -1164,394 +1407,604 @@ def run_llm_code_review(directory, config=None):
     run_llm_analysis_on_top_files(directory, system_prompt, "Review", CODE_REVIEW_SCHEMA, config=config)
 
 # =============================================================================
-# ARCHITECTURAL ANALYSIS RUNNER
+# INTERACTIVE DEEP DIVE MODE
 # =============================================================================
 
-def run_architectural_analysis(directory, config=None, file_data=None):
-    """Run comprehensive architectural analysis with optional pre-collected file data."""
-    print(f"\n{BOLD}--- Architectural Health Analysis ---{RESET}")
-    
-    if file_data is None:
-        # Collect files if not provided
-        file_data = collect_all_project_files(directory, config=config)
-    
-    file_paths = file_data['script_files']  # Focus on script files for architectural analysis
-    
-    # Check for cached dependency graph
-    project_hash = get_project_hash(file_paths)
-    cached_graph = load_cached_dependency_graph(project_hash)
-    
-    if cached_graph:
-        print(f"{GREY}Using cached dependency graph...{RESET}")
-        sniffer = ArchitecturalSniffer(directory, config)
-        sniffer.dependency_graph = cached_graph
-    else:
-        print(f"{GREY}Building dependency graph...{RESET}")
-        sniffer = ArchitecturalSniffer(directory, config)
-        sniffer._build_dependency_graph(file_paths)        # Cache the newly built graph
-        save_dependency_graph_cache(sniffer.dependency_graph, project_hash)
-    
-    print(f"{GREY}Checking architectural patterns...{RESET}")
-    sniffer._check_boundary_violations()
-    sniffer._check_feature_entanglement()
-    sniffer._check_blast_radius()
-    sniffer._check_circular_dependencies()
-    sniffer._check_ghost_files(file_data['all_files'])
-    sniffer._check_stale_logic(file_data['all_files'])
-    sniffer._check_high_churn(file_data['all_files'])
-    sniffer._check_stale_tests(file_data['all_files'])
-    
-    smells = sniffer.smells
-    
+def interactive_deep_dive(smells, directory, config=None):
+    """Interactive mode for deep-diving into specific architectural issues with AI."""
     if not smells:
-        print(f"{GREEN}✅ No architectural issues detected! Your codebase follows good design principles.{RESET}")
-        return []
+        return
     
-    # Group and display smells by type
+    # Configure AI if not already done
+    if not configure_gemini():
+        print(f"{RED}AI not configured. Cannot perform deep dive analysis.{RESET}")
+        return
+    
+    print(f"\n{BOLD}🔍 Interactive Deep Dive Mode{RESET}")
+    print(f"{GREY}Select an issue to analyze with AI, or 'q' to quit:{RESET}")
+    
+    # Group smells by type for better organization
     smell_groups = defaultdict(list)
     for smell in smells:
         smell_groups[smell['type']].append(smell)
+    
+    # Create a numbered list of all issues
+    issues = []
+    index = 1
     
     for smell_type, smell_list in smell_groups.items():
         emoji_type = ARCHITECTURAL_SMELLS.get(smell_type, '⚠️  ISSUE')
         print(f"\n{RED}{emoji_type}:{RESET}")
         
         for smell in smell_list:
+            issues.append(smell)
             severity_color = RED if smell['severity'] == 'high' else YELLOW
-            print(f"  {severity_color}• {smell['message']}{RESET}")
-    
-    print(f"\n{GREY}Found {len(smells)} architectural issues across {len(smell_groups)} categories.{RESET}")
-    return smells
-
-def get_file_structure_from_data(directory, file_data, markdown=False, json_output=False, coverage_data=None):
-    """Generate file structure analysis using pre-collected file data."""
-    lines = []
-    directory_totals = {}
-    file_stats = []
-    duplicate_files = collections.defaultdict(list)
-    ext_counts = collections.Counter()
-    errors = []
-    
-    stats = {
-        "total_files": 0,
-        "script_files": 0,
-        "data_files": 0,
-        "binary_files": 0,
-        "total_lines": 0,
-        "script_lines": 0,
-        "data_lines": 0,
-        "other_lines": 0,
-    }
-    
-    # Build file tree structure from collected data
-    def build_tree_from_files(files, base_path):
-        tree = {}
-        for file_path in files:
-            try:
-                rel_path = Path(file_path).relative_to(base_path)
-                parts = rel_path.parts
-                current_level = tree
-                
-                # Build nested structure
-                for i, part in enumerate(parts[:-1]):
-                    if part not in current_level:
-                        current_level[part] = {}
-                    current_level = current_level[part]
-                
-                # Add file
-                if len(parts) > 0:
-                    filename = parts[-1]
-                    current_level[filename] = file_path
-            except ValueError:
-                continue  # Skip files outside base path
-        return tree
-    
-    def render_tree(tree, prefix="", path_so_far=""):
-        items = sorted(tree.items())
-        dirs = [(k, v) for k, v in items if isinstance(v, dict)]
-        files = [(k, v) for k, v in items if not isinstance(v, dict)]
-        
-        # Render directories first
-        for i, (name, subtree) in enumerate(dirs):
-            is_last_dir = (i == len(dirs) - 1) and len(files) == 0
-            pointer = "└── " if is_last_dir else "├── "
-            lines.append(f"{prefix}{pointer}{BLUE}{name}/{RESET}")
             
-            extension = "    " if is_last_dir else "│   "
-            render_tree(subtree, prefix + extension, os.path.join(path_so_far, name))
-        
-        # Render files
-        for i, (name, file_path) in enumerate(files):
-            is_last = (i == len(files) - 1)
-            pointer = "└── " if is_last else "├── "
-            
-            stats["total_files"] += 1
-            _, ext = os.path.splitext(name)
-            ext = ext.lower()
-            ext_counts[ext] += 1
-            
-            duplicate_files[name].append(os.path.join(path_so_far, name))
-            
-            if is_binary_file(file_path):
-                stats["binary_files"] += 1
-                lines.append(f"{prefix}{pointer}{GREEN}{name}{RESET} {GREY}(binary file){RESET}")
-                file_stats.append({
-                    "path": os.path.join(path_so_far, name),
-                    "lines": 0,
-                    "type": "binary",
-                    "size": get_file_size(file_path)
-                })
+            # Extract file name for display
+            if 'file' in smell:
+                file_name = Path(smell['file']).name
+            elif 'files' in smell:
+                file_name = f"{len(smell['files'])} files"
             else:
-                line_count = count_lines(file_path)
-                stats["total_lines"] += line_count
-                
-                if ext in SCRIPT_EXTS:
-                    stats["script_files"] += 1
-                    stats["script_lines"] += line_count
-                    file_type = "script"
-                    
-                    if line_count >= FILE_DANGER_THRESHOLD:
-                        line_color = RED
-                        warning = " (!!! TOO LARGE !!!)"
-                    elif line_count >= FILE_WARNING_THRESHOLD:
-                        line_color = YELLOW
-                        warning = " (! approaching limit !)"
-                    else:
-                        line_color = RESET
-                        warning = ""
-                    lines.append(f"{prefix}{pointer}{GREEN}{name}{RESET} {line_color}({line_count} lines){warning}{RESET}")
-                elif ext in DATA_EXTS:
-                    stats["data_files"] += 1
-                    stats["data_lines"] += line_count
-                    file_type = "data"
-                    lines.append(f"{prefix}{pointer}{GREEN}{name}{RESET} ({line_count} lines)")
+                file_name = "Unknown"
+            
+            print(f"  {index}. {severity_color}{file_name}{RESET} - {smell['message'][:80]}...")
+            index += 1
+    
+    while True:
+        try:
+            print(f"\n{BOLD}Enter number (1-{len(issues)}) to analyze, or 'q' to quit:{RESET}")
+            choice = input("> ").strip().lower()
+            
+            if choice == 'q' or choice == 'quit':
+                print(f"{GREY}Exiting deep dive mode.{RESET}")
+                break
+            
+            try:
+                choice_num = int(choice)
+                if 1 <= choice_num <= len(issues):
+                    selected_smell = issues[choice_num - 1]
+                    print(f"\n{GREY}Analyzing issue {choice_num} with AI...{RESET}")
+                    analyze_smell_with_ai(selected_smell, directory, config)
                 else:
-                    stats["other_lines"] += line_count
-                    file_type = "other"
-                    lines.append(f"{prefix}{pointer}{GREEN}{name}{RESET} ({line_count} lines)")
-                
-                file_stats.append({
-                    "path": os.path.join(path_so_far, name),
-                    "lines": line_count,
-                    "type": file_type,
-                    "size": get_file_size(file_path)
-                })
-    
-    # Start rendering
-    lines.append(f"{os.path.basename(directory)}/")
-    tree = build_tree_from_files(file_data['all_files'], directory)
-    render_tree(tree)
-    
-    # Add coverage data if available
-    if coverage_data:
-        lines.append(f"\n{BOLD}--- Jest Test Coverage ---{RESET}")
-        lines.append(coverage_data)
-    
-    # Format output based on requested format
-    if markdown:
-        md = []
-        md.append("## File Tree\n")
-        md.append("```")
-        md.append(remove_ansi_colors("\n".join(lines)))
-        md.append("```")
-        if coverage_data:
-            md.append("\n## Test Coverage\n")
-            md.append(f"```\n{remove_ansi_colors(coverage_data)}\n```")
-        return "\n".join(md)
-    elif json_output:
-        if coverage_data:
-            stats['coverage_report'] = remove_ansi_colors(coverage_data)
-        return json.dumps({"stats": stats}, indent=2)
-    else:
-        return "\n".join(lines)
+                    print(f"{RED}Invalid choice. Please enter a number between 1 and {len(issues)}.{RESET}")
+            except ValueError:
+                print(f"{RED}Invalid input. Please enter a number or 'q' to quit.{RESET}")
+        except KeyboardInterrupt:
+            print(f"\n{GREY}Exiting deep dive mode.{RESET}")
+            break
 
-# =============================================================================
-# MAIN FILE STRUCTURE ANALYSIS
-# =============================================================================
+def analyze_smell_with_ai(smell, directory, config=None):
+    """Analyze a specific architectural smell with AI."""
+    smell_type = smell['type']
+    
+    # Get the relevant file(s) for analysis
+    target_files = []
+    if 'file' in smell:
+        target_files = [smell['file']]
+    elif 'files' in smell:
+        target_files = smell['files'][:3]  # Limit to 3 files for token limits
+    
+    if not target_files:
+        print(f"{RED}No files associated with this issue.{RESET}")
+        return
+    
+    print(f"\n{BOLD}🤖 AI Deep Dive Analysis{RESET}")
+    print(f"{YELLOW}Issue Type:{RESET} {ARCHITECTURAL_SMELLS.get(smell_type, smell_type)}")
+    print(f"{YELLOW}Description:{RESET} {smell['message']}")
+    
+    # Create specialized prompts based on smell type
+    system_prompt = get_deep_dive_prompt(smell_type)
+    
+    for i, file_path in enumerate(target_files, 1):
+        try:
+            print(f"\n{BOLD}File {i}: {Path(file_path).name}{RESET}")
+            
+            # Read file content (limit for token constraints)
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                code_content = f.read(6000)  # Limit to avoid token limits
+            
+            if len(code_content) >= 5800:
+                code_content += "\n\n... (file truncated for analysis)"
+            
+            user_prompt = f"""
+**Issue Type:** {smell_type}
+**Problem Description:** {smell['message']}
+**File Path:** `{Path(file_path).relative_to(directory)}`
 
-def get_file_structure(directory, ignore_patterns=None, markdown=False, json_output=False, coverage_data=None):
-    """Generate file structure analysis with various output formats."""
-    if ignore_patterns is None:
-        ignore_patterns = parse_gitignore(directory)
+**Code to analyze:**
+```
+{code_content}
+```
+
+Please provide specific, actionable advice for addressing this architectural issue in this file.
+"""
+            
+            # Call AI for analysis
+            prompt_messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+            
+            response = call_llm(prompt_messages)
+            print(f"{GREEN}AI Analysis:{RESET}")
+            print(response)
+            
+        except Exception as e:
+            print(f"{RED}Error analyzing {Path(file_path).name}: {e}{RESET}")
     
-    lines = []
-    directory_totals = {}
-    file_stats = []
-    base_dir = directory
-    duplicate_files = collections.defaultdict(list)
-    ext_counts = collections.Counter()
-    top_level_files = set()
-    errors = []
-    
-    stats = {
-        "total_files": 0,
-        "script_files": 0,
-        "data_files": 0,
-        "binary_files": 0,
-        "total_lines": 0,
-        "script_lines": 0,
-        "data_lines": 0,
-        "other_lines": 0,
+    print(f"\n{GREY}{'='*60}{RESET}")
+
+def get_deep_dive_prompt(smell_type):
+    """Get specialized AI prompts based on architectural smell type."""
+    prompts = {
+        'BOUNDARY_VIOLATION': """You are an expert software architect specializing in layered architecture and dependency management. 
+        Analyze the code for architectural boundary violations and provide specific refactoring steps to fix dependency issues.""",
+        
+        'ENTANGLEMENT': """You are an expert in feature-driven development and module decoupling. 
+        Analyze the code for feature entanglement and suggest ways to extract shared dependencies into common modules.""",
+        
+        'BLAST_RADIUS': """You are an expert in dependency injection and module design. 
+        Analyze this highly-imported file and suggest ways to reduce its blast radius through better abstraction and interface design.""",
+        
+        'CIRCULAR_DEPENDENCY': """You are an expert in dependency graph analysis and refactoring. 
+        Analyze the code for circular dependencies and provide step-by-step instructions to break the dependency cycle.""",
+        
+        'GHOST_FILE': """You are a test-driven development expert. 
+        Analyze this untested file and suggest the most important test cases to write, considering edge cases and business logic.""",
+        
+        'STALE_LOGIC': """You are an expert in legacy code modernization and technical debt management. 
+        Analyze this old code and identify potential risks, outdated patterns, and modernization opportunities.""",
+        
+        'HIGH_CHURN': """You are an expert in code stability and change impact analysis. 
+        Analyze this frequently-changed file to identify why it changes often and suggest refactoring to improve stability.""",
+        
+        'STALE_TESTS': """You are a testing strategy expert. 
+        Analyze the relationship between this source file and its tests, and suggest how to bring the test coverage up to date."""
     }
     
-    def walk_dir(path, prefix="", depth=0):
-        dirs, files = [], []
-        dir_total_lines = 0
-        rel_path = os.path.relpath(path, directory)
-        if rel_path == ".":
-            rel_path = os.path.basename(directory)
+    return prompts.get(smell_type, 
+        "You are a software architecture expert. Analyze the code and provide specific recommendations for improvement.")
+
+# =============================================================================
+# TEST COVERAGE ANALYSIS
+# =============================================================================
+
+def is_jest_project(directory):
+    """Check if project uses Jest for testing."""
+    package_json_path = os.path.join(directory, "package.json")
+    if not os.path.exists(package_json_path):
+        return False
+    try:
+        with open(package_json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        deps = data.get("dependencies", {})
+        dev_deps = data.get("devDependencies", {})
+        return "jest" in deps or "jest" in dev_deps or "jest" in data
+    except (json.JSONDecodeError, IOError):
+        return False
+
+def run_jest_coverage(directory):
+    """Run Jest coverage analysis."""
+    print(f"\n{BOLD}--- Jest Coverage Analysis ---{RESET}")
+    print(f"{YELLOW}Running 'npm test' to generate coverage report...{RESET}")
+    
+    try:
+        subprocess.run([
+            "npm", "test"
+        ], cwd=directory, check=True, capture_output=True, text=True)
+        print(f"{GREEN}✔ Test run completed successfully.{RESET}")
+    except FileNotFoundError:
+        print(f"{RED}✖ Error: 'npm' command not found. Is Node.js installed?{RESET}")
+        return None
+    except subprocess.CalledProcessError:
+        print(f"{RED}✖ Error: 'npm test' failed. See test output for details.{RESET}")
+        return None
+    
+    coverage_file = os.path.join(directory, "coverage", "coverage-summary.json")
+    if not os.path.exists(coverage_file):
+        print(f"{RED}✖ Analysis Error: 'coverage/coverage-summary.json' not found.{RESET}")
+        print(f"{YELLOW}  Hint: Ensure your jest.config.js has 'json-summary' in coverageReport.{RESET}")
+        return None
+    
+    with open(coverage_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    total_coverage = data.get("total", {})
+    lines_pct = total_coverage.get("lines", {}).get("pct", 0)
+    color = GREEN if lines_pct >= 70 else YELLOW if lines_pct >= 50 else RED
+    
+    return f"  Overall Line Coverage: {color}{lines_pct:.2f}%{RESET}\n{GREY}------------------------------------{RESET}"
+
+# =============================================================================
+# AI-POWERED ANALYSIS
+# =============================================================================
+
+def configure_gemini():
+    """Configure the Gemini client with API key."""
+    load_dotenv()
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        print(f"{RED}✖ Error: GOOGLE_API_KEY not found in environment variables or .env file.{RESET}")
+        return None
+    try:
+        genai.configure(api_key=api_key)
+        return True
+    except Exception as e:
+        print(f"{RED}✖ Error configuring Gemini client: {e}{RESET}")
+        return None
+
+def call_llm(prompt_messages, json_schema=None):
+    """Call the Google Gemini API with optional JSON schema enforcement."""
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
-        # Collect top-level files
-        if depth == 0:
-            try:
-                for entry in sorted(os.listdir(path)):
-                    entry_path = os.path.join(path, entry)
-                    if os.path.isfile(entry_path):
-                        top_level_files.add(entry)
-            except (OSError, IOError):
-                pass
+        # Convert OpenAI-style messages to Gemini format
+        system_prompt = ""
+        user_prompt = ""
+        for msg in prompt_messages:
+            if msg['role'] == 'system':
+                system_prompt += msg['content'] + "\n\n"
+            elif msg['role'] == 'user':
+                user_prompt += msg['content']
         
-        # Process directory contents
-        try:
-            for entry in sorted(os.listdir(path)):
-                entry_path = os.path.join(path, entry)
-                if should_ignore(entry_path, ignore_patterns, base_dir):
+        full_prompt = system_prompt + user_prompt
+        
+        generation_config = {
+            "temperature": 0.2,
+            "top_p": 0.8,
+            "top_k": 20,
+        }
+        
+        if json_schema:
+            generation_config["response_mime_type"] = "application/json"
+            full_prompt += "\n\nIMPORTANT: Your entire response MUST be a single JSON object matching this schema:\n" + json.dumps(json_schema)
+        
+        response = model.generate_content(full_prompt, generation_config=generation_config)
+        return response.text
+        
+    except Exception as e:
+        return f'{{"error": "Error calling Google Gemini API: {str(e)}"}}'
+
+def find_all_source_dirs(root_path, source_dirs, ignore_patterns, base_dir, config=None):
+    """Recursively find all directories matching source directory names."""
+    matches = []
+    for dirpath, dirnames, _ in os.walk(root_path):
+        # Remove ignored directories in-place
+        dirnames[:] = [d for d in dirnames if not should_ignore(
+            os.path.join(dirpath, d), ignore_patterns, base_dir, config)]
+        for d in dirnames:
+            if d in source_dirs:
+                matches.append(Path(dirpath) / d)
+    return matches
+
+def find_top_script_files(directory, ignore_patterns, base_dir, count=3, config=None):
+    """Find the top script files for analysis based on various criteria."""
+    source_dirs = get_configured_source_dirs(config)
+    all_source_dirs = find_all_source_dirs(directory, source_dirs, ignore_patterns, base_dir, config)
+    
+    # Store the top file found for each source directory
+    top_files_per_dir = {str(path): (0, 0, None) for path in all_source_dirs}
+    
+    if not all_source_dirs:
+        print(f"{YELLOW}Warning: No source directories found. Analyzing project root as fallback.{RESET}")
+        return []
+    
+    now = time.time()
+    for search_path in all_source_dirs:
+        for root, dirs, files in os.walk(search_path):
+            dirs[:] = [d for d in dirs if not should_ignore(
+                os.path.join(root, d), ignore_patterns, base_dir, config)]
+            
+            for name in files:
+                file_path = os.path.join(root, name)
+                if should_ignore(file_path, ignore_patterns, base_dir, config):
                     continue
-                if os.path.isdir(entry_path):
-                    dirs.append(entry)
-                else:
-                    files.append(entry)
-        except PermissionError:
-            lines.append(f"{prefix}├── {RED}Permission denied{RESET}")
-            errors.append({"path": path, "error": "Permission denied"})
-            return 0
-        except (OSError, IOError) as e:
-            lines.append(f"{prefix}├── Error: {str(e)}")
-            errors.append({"path": path, "error": str(e)})
-            return 0
+                
+                ext = Path(name).suffix
+                if ext in SCRIPT_EXTS:
+                    line_count = count_lines(file_path)
+                    
+                    # Scoring logic
+                    rel_path = str(Path(file_path).relative_to(directory))
+                    score = 0
+                    
+                    if any(part in source_dirs for part in Path(rel_path).parts): 
+                        score += 30
+                    if any(part in {"test", "tests", "docs", "archived"} for part in Path(rel_path).parts): 
+                        score -= 20
+                    
+                    try:
+                        if now - os.path.getmtime(file_path) < 7*24*3600: 
+                            score += 15
+                    except Exception: 
+                        pass
+                    
+                    score += min(line_count // 10, 10)
+                    
+                    # Check if this is the new top file for its source directory
+                    current_top_score = top_files_per_dir[str(search_path)][0]
+                    if score > current_top_score:
+                        top_files_per_dir[str(search_path)] = (score, line_count, file_path)
+    
+    # Collect results
+    final_files = []
+    for _, line_count, file_path in top_files_per_dir.values():
+        if file_path:
+            final_files.append((line_count, file_path))
+    
+    final_files.sort(key=lambda item: item[0], reverse=True)
+    return final_files
+
+def run_llm_analysis_on_top_files(directory, system_prompt, output_label, schema=None, config=None):
+    """Run LLM analysis on top files in the project."""
+    print(f"\n{BOLD}--- LLM-Powered {output_label} ---{RESET}")
+    
+    base_dir = directory
+    ignore_patterns = parse_gitignore(base_dir, config)
+    top_files = find_top_script_files(
+        directory, ignore_patterns, base_dir, 
+        count=get_configured_llm_review_file_count(config), config=config
+    )
+    
+    if not top_files:
+        print(f"{GREY}No script files found to analyze.{RESET}")
+        return
+    
+    cache = load_cache()
+    cache_updated = False
+    project_context = config.get("project_context", "This file is part of a software project.")
+    
+    for idx, (line_count, file_path) in enumerate(top_files, 1):
+        print(f"\n{BOLD}File {idx}: {os.path.relpath(file_path, directory)} ({line_count} lines){RESET}")
         
-        # Process directories
-        pointers = ["├── "] * (len(dirs) - 1) + ["└── "] if dirs else []
-        for pointer, name in zip(pointers, dirs):
-            full_path = os.path.join(path, name)
-            subdir_rel_path = os.path.join(rel_path, name) if rel_path != "." else name
-            
+        file_hash = get_file_md5(file_path)
+        cache_key = f"{file_path}|{file_hash}|{output_label}"
+        cached_result = cache.get(cache_key)
+        
+        if cached_result:
+            print(f"{GREY}  -> Using cached {output_label} result.{RESET}")
+            response_str = cached_result
+        else:
             try:
-                if not os.listdir(full_path):
-                    lines.append(f"{prefix}{pointer}{BLUE}{name}/{RESET} {GREY}(Empty){RESET}")
-                    subdir_lines = 0
-                else:
-                    lines.append(f"{prefix}{pointer}{BLUE}{name}/{RESET}")
-                    extension = "│   " if pointer == "├── " else "    "
-                    subdir_lines = walk_dir(full_path, prefix + extension, depth+1)
-                
-                if subdir_lines > 0:
-                    directory_totals[subdir_rel_path] = subdir_lines
-                dir_total_lines += subdir_lines
-                
-            except PermissionError:
-                lines.append(f"{prefix}{pointer}{BLUE}{name}/{RESET} {GREY}(Permission denied){RESET}")
-            except (OSError, IOError) as e:
-                lines.append(f"{prefix}{pointer}{BLUE}{name}/{RESET} {GREY}(Error: {str(e)}){RESET}")
-        
-        # Process files
-        for name in files:
-            file_path = os.path.join(path, name)
-            stats["total_files"] += 1
-            _, ext = os.path.splitext(name)
-            ext = ext.lower()
-            ext_counts[ext] += 1
-            file_size = get_file_size(file_path)
-            
-            duplicate_files[name].append(os.path.join(rel_path, name))
-            
-            is_binary = is_binary_file(file_path)
-            
-            if is_binary:
-                stats["binary_files"] += 1
-                file_stats.append({
-                    "path": os.path.join(rel_path, name), 
-                    "lines": 0, 
-                    "type": "binary", 
-                    "size": file_size
-                })
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    code = f.read(4000)  # Limit to avoid token limits
+            except Exception as e:
+                print(f"{RED}Could not read file: {e}{RESET}")
                 continue
             
-            line_count = count_lines(file_path)
-            dir_total_lines += line_count
-            stats["total_lines"] += line_count
+            user_prompt = (
+                f"Please analyze the following file.\n\n"
+                f"**File Path:** `{os.path.relpath(file_path, directory)}`\n\n"
+                f"**Project Context:** {project_context}\n\n"
+                f"**File Content:**\n\n```{Path(file_path).suffix[1:] or 'txt'}\n{code}\n```"
+            )
             
-            if ext in SCRIPT_EXTS:
-                stats["script_files"] += 1
-                stats["script_lines"] += line_count
-                file_type = "script"
-            elif ext in DATA_EXTS:
-                stats["data_files"] += 1
-                stats["data_lines"] += line_count
-                file_type = "data"
-            else:
-                stats["other_lines"] += line_count
-                file_type = "other"
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
             
-            file_stats.append({
-                "path": os.path.join(rel_path, name),
-                "lines": line_count,
-                "type": file_type,
-                "size": file_size
-            })
-          # Display files with appropriate formatting
-        pointers = ["├── "] * (len(files) - 1) + ["└── "] if files else []
-        for pointer, name in zip(pointers, files):
-            file_path = os.path.join(path, name)
-            _, ext = os.path.splitext(name)
-            ext = ext.lower()
-            
-            if is_binary_file(file_path):
-                lines.append(f"{prefix}{pointer}{GREEN}{name}{RESET} {GREY}(binary file){RESET}")
-            else:
-                line_count = count_lines(file_path)
-                if ext in SCRIPT_EXTS:
-                    if line_count >= FILE_DANGER_THRESHOLD:
-                        line_color = RED
-                        warning = " (!!! TOO LARGE !!!)"  # Yes, this will hilariously flag itself 😄
-                    elif line_count >= FILE_WARNING_THRESHOLD:
-                        line_color = YELLOW
-                        warning = " (! approaching limit !)"
-                    else:
-                        line_color = RESET
-                        warning = ""
-                    lines.append(f"{prefix}{pointer}{GREEN}{name}{RESET} {line_color}({line_count} lines){warning}{RESET}")
-                else:
-                    lines.append(f"{prefix}{pointer}{GREEN}{name}{RESET} ({line_count} lines)")
+            print(f"{GREY}  -> Sending to LLM for {output_label}. This may take a few minutes...{RESET}")
+            response_str = call_llm(messages, json_schema=schema)
+            cache[cache_key] = response_str
+            cache_updated = True
         
-        return dir_total_lines
+        # Parse and display results
+        try:
+            # Try to extract JSON from markdown code blocks
+            cleaned_json_str = response_str
+            match = re.search(r'```(?:json)?\s*({.*})\s*```', response_str, re.DOTALL)
+            if match:
+                cleaned_json_str = match.group(1)
+            
+            response_data = json.loads(cleaned_json_str)
+            
+            if 'error' in response_data:
+                print(f"{RED}{response_data['error']}{RESET}")
+                continue
+            
+            print(f"{YELLOW}{output_label}:{RESET}")
+            if output_label == "Review":
+                print(f"  {GREEN}Positive Points:{RESET}")
+                for point in response_data.get("positive_points", []):
+                    print(f"    - {point}")
+                print(f"  {YELLOW}Refactoring Suggestions:{RESET}")
+                for sugg in response_data.get("refactoring_suggestions", []):
+                    print(f"    - {BOLD}Smell:{RESET} {sugg['smell']}")
+                    print(f"      {BOLD}Explanation:{RESET} {sugg['explanation']}")
+                    print(f"      {BOLD}Suggestion:{RESET} {sugg['suggestion']}")
+            elif output_label == "Summary":
+                print(f"  {GREEN}Summary:{RESET} {response_data.get('summary', '')}")
+                
+        except json.JSONDecodeError:
+            print(f"{RED}✖ Failed to parse LLM response as JSON.{RESET}")
+            print(f"{GREY}--- Raw LLM Output ---{RESET}")
+            print(response_str)
+            print(f"{GREY}------------------------{RESET}")
     
-    # Start the analysis
-    lines.append(f"{os.path.basename(directory)}/")
-    walk_dir(directory)
+    if cache_updated:
+        save_cache(cache)
+
+def run_llm_summarization(directory, config=None):
+    """Run LLM-powered code summarization."""
+    system_prompt = (
+        "You are a senior software architect. Your task is to summarize the following code file in 2-3 sentences. "
+        "Focus on its primary responsibility, its main inputs, and its key outputs or side effects. "
+        "Respond ONLY with a JSON object matching the provided schema."
+    )
+    run_llm_analysis_on_top_files(directory, system_prompt, "Summary", CODE_SUMMARY_SCHEMA, config=config)
+
+def run_llm_code_review(directory, config=None):
+    """Run LLM-powered code review."""
+    system_prompt = (
+        "You are a code review expert specializing in clean code principles. Analyze the following code. "
+        "Identify potential code smells such as long functions, high cyclomatic complexity, tight coupling, or poor naming. "
+        "For each smell, provide a brief explanation and a suggestion for refactoring. "
+        "If there are no obvious smells, say 'Code looks clean.' "
+        "Respond ONLY with a JSON object matching the provided schema."
+    )
+    run_llm_analysis_on_top_files(directory, system_prompt, "Review", CODE_REVIEW_SCHEMA, config=config)
+
+# =============================================================================
+# INTERACTIVE DEEP DIVE MODE
+# =============================================================================
+
+def interactive_deep_dive(smells, directory, config=None):
+    """Interactive mode for deep-diving into specific architectural issues with AI."""
+    if not smells:
+        return
     
-    # Add coverage data if available
-    if coverage_data:
-        lines.append(f"\n{BOLD}--- Jest Test Coverage ---{RESET}")
-        lines.append(coverage_data)
+    # Configure AI if not already done
+    if not configure_gemini():
+        print(f"{RED}AI not configured. Cannot perform deep dive analysis.{RESET}")
+        return
     
-    # Format output based on requested format
-    if markdown:
-        md = []
-        md.append("## File Tree\n")
-        md.append("```")
-        md.append(remove_ansi_colors("\n".join(lines)))
-        md.append("```")
-        if coverage_data:
-            md.append("\n## Test Coverage\n")
-            md.append(f"```\n{remove_ansi_colors(coverage_data)}\n```")
-        return "\n".join(md)
-    elif json_output:
-        if coverage_data:
-            stats['coverage_report'] = remove_ansi_colors(coverage_data)
-        return json.dumps({"stats": stats}, indent=2)
-    else:
-        return "\n".join(lines)
+    print(f"\n{BOLD}🔍 Interactive Deep Dive Mode{RESET}")
+    print(f"{GREY}Select an issue to analyze with AI, or 'q' to quit:{RESET}")
+    
+    # Group smells by type for better organization
+    smell_groups = defaultdict(list)
+    for smell in smells:
+        smell_groups[smell['type']].append(smell)
+    
+    # Create a numbered list of all issues
+    issues = []
+    index = 1
+    
+    for smell_type, smell_list in smell_groups.items():
+        emoji_type = ARCHITECTURAL_SMELLS.get(smell_type, '⚠️  ISSUE')
+        print(f"\n{RED}{emoji_type}:{RESET}")
+        
+        for smell in smell_list:
+            issues.append(smell)
+            severity_color = RED if smell['severity'] == 'high' else YELLOW
+            
+            # Extract file name for display
+            if 'file' in smell:
+                file_name = Path(smell['file']).name
+            elif 'files' in smell:
+                file_name = f"{len(smell['files'])} files"
+            else:
+                file_name = "Unknown"
+            
+            print(f"  {index}. {severity_color}{file_name}{RESET} - {smell['message'][:80]}...")
+            index += 1
+    
+    while True:
+        try:
+            print(f"\n{BOLD}Enter number (1-{len(issues)}) to analyze, or 'q' to quit:{RESET}")
+            choice = input("> ").strip().lower()
+            
+            if choice == 'q' or choice == 'quit':
+                print(f"{GREY}Exiting deep dive mode.{RESET}")
+                break
+            
+            try:
+                choice_num = int(choice)
+                if 1 <= choice_num <= len(issues):
+                    selected_smell = issues[choice_num - 1]
+                    print(f"\n{GREY}Analyzing issue {choice_num} with AI...{RESET}")
+                    analyze_smell_with_ai(selected_smell, directory, config)
+                else:
+                    print(f"{RED}Invalid choice. Please enter a number between 1 and {len(issues)}.{RESET}")
+            except ValueError:
+                print(f"{RED}Invalid input. Please enter a number or 'q' to quit.{RESET}")
+        except KeyboardInterrupt:
+            print(f"\n{GREY}Exiting deep dive mode.{RESET}")
+            break
+
+def analyze_smell_with_ai(smell, directory, config=None):
+    """Analyze a specific architectural smell with AI."""
+    smell_type = smell['type']
+    
+    # Get the relevant file(s) for analysis
+    target_files = []
+    if 'file' in smell:
+        target_files = [smell['file']]
+    elif 'files' in smell:
+        target_files = smell['files'][:3]  # Limit to 3 files for token limits
+    
+    if not target_files:
+        print(f"{RED}No files associated with this issue.{RESET}")
+        return
+    
+    print(f"\n{BOLD}🤖 AI Deep Dive Analysis{RESET}")
+    print(f"{YELLOW}Issue Type:{RESET} {ARCHITECTURAL_SMELLS.get(smell_type, smell_type)}")
+    print(f"{YELLOW}Description:{RESET} {smell['message']}")
+    
+    # Create specialized prompts based on smell type
+    system_prompt = get_deep_dive_prompt(smell_type)
+    
+    for i, file_path in enumerate(target_files, 1):
+        try:
+            print(f"\n{BOLD}File {i}: {Path(file_path).name}{RESET}")
+            
+            # Read file content (limit for token constraints)
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                code_content = f.read(6000)  # Limit to avoid token limits
+            
+            if len(code_content) >= 5800:
+                code_content += "\n\n... (file truncated for analysis)"
+            
+            user_prompt = f"""
+**Issue Type:** {smell_type}
+**Problem Description:** {smell['message']}
+**File Path:** `{Path(file_path).relative_to(directory)}`
+
+**Code to analyze:**
+```
+{code_content}
+```
+
+Please provide specific, actionable advice for addressing this architectural issue in this file.
+"""
+            
+            # Call AI for analysis
+            prompt_messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+            
+            response = call_llm(prompt_messages)
+            print(f"{GREEN}AI Analysis:{RESET}")
+            print(response)
+            
+        except Exception as e:
+            print(f"{RED}Error analyzing {Path(file_path).name}: {e}{RESET}")
+    
+    print(f"\n{GREY}{'='*60}{RESET}")
+
+def get_deep_dive_prompt(smell_type):
+    """Get specialized AI prompts based on architectural smell type."""
+    prompts = {
+        'BOUNDARY_VIOLATION': """You are an expert software architect specializing in layered architecture and dependency management. 
+        Analyze the code for architectural boundary violations and provide specific refactoring steps to fix dependency issues.""",
+        
+        'ENTANGLEMENT': """You are an expert in feature-driven development and module decoupling. 
+        Analyze the code for feature entanglement and suggest ways to extract shared dependencies into common modules.""",
+        
+        'BLAST_RADIUS': """You are an expert in dependency injection and module design. 
+        Analyze this highly-imported file and suggest ways to reduce its blast radius through better abstraction and interface design.""",
+        
+        'CIRCULAR_DEPENDENCY': """You are an expert in dependency graph analysis and refactoring. 
+        Analyze the code for circular dependencies and provide step-by-step instructions to break the dependency cycle.""",
+        
+        'GHOST_FILE': """You are a test-driven development expert. 
+        Analyze this untested file and suggest the most important test cases to write, considering edge cases and business logic.""",
+        
+        'STALE_LOGIC': """You are an expert in legacy code modernization and technical debt management. 
+        Analyze this old code and identify potential risks, outdated patterns, and modernization opportunities.""",
+        
+        'HIGH_CHURN': """You are an expert in code stability and change impact analysis. 
+        Analyze this frequently-changed file to identify why it changes often and suggest refactoring to improve stability.""",
+        
+        'STALE_TESTS': """You are a testing strategy expert. 
+        Analyze the relationship between this source file and its tests, and suggest how to bring the test coverage up to date."""
+    }
+    
+    return prompts.get(smell_type, 
+        "You are a software architecture expert. Analyze the code and provide specific recommendations for improvement.")
 
 # =============================================================================
 # HTML REPORT GENERATION
@@ -1670,6 +2123,148 @@ def collect_all_project_files(directory, ignore_patterns=None, config=None):
         'script_files': script_files,
         'ignore_patterns': ignore_patterns
     }
+
+def get_file_structure_from_data(directory, file_data, markdown=False, json_output=False, coverage_data=None):
+    """
+    Generate file structure output from collected file data.
+    This is a placeholder function that provides basic file tree functionality.
+    """
+    output_lines = []
+    
+    if json_output:
+        # Return JSON format
+        result = {
+            "directory": directory,
+            "total_files": len(file_data['all_files']),
+            "total_directories": len(file_data['all_directories']),
+            "source_directories": file_data['source_directories'],
+            "script_files": len(file_data['script_files'])
+        }
+        if coverage_data:
+            result["coverage"] = coverage_data
+        return json.dumps(result, indent=2)
+    
+    # Generate text output
+    output_lines.append(f"\n{BOLD}📁 Project Structure Analysis{RESET}")
+    output_lines.append(f"{GREY}================================{RESET}")
+    output_lines.append(f"Directory: {directory}")
+    output_lines.append(f"Total Files: {len(file_data['all_files'])}")
+    output_lines.append(f"Total Directories: {len(file_data['all_directories'])}")
+    output_lines.append(f"Script Files: {len(file_data['script_files'])}")
+    
+    if file_data['source_directories']:
+        output_lines.append(f"\n{BOLD}Source Directories:{RESET}")
+        for src_dir in file_data['source_directories']:
+            output_lines.append(f"  📂 {os.path.relpath(src_dir, directory)}")
+    
+    if coverage_data:
+        output_lines.append(f"\n{BOLD}Test Coverage:{RESET}")
+        output_lines.append(coverage_data)
+    
+    result = "\n".join(output_lines)
+    
+    if markdown:
+        # Convert to markdown format
+        result = result.replace(BOLD, "**").replace(RESET, "**")
+        result = re.sub(r"\033\[[0-9;]*m", "", result)  # Remove other ANSI codes
+    
+    return result
+
+# =============================================================================
+# ARCHITECTURAL ANALYSIS WORKFLOW
+# =============================================================================
+
+def run_architectural_analysis(directory, config=None, file_data=None):
+    """
+    Run architectural analysis and provide interactive deep-dive capabilities.
+    
+    This function:
+    1. Runs the architectural smell detection using ArchitecturalSniffer
+    2. Displays issues found in a numbered format
+    3. Prompts user to select issues for AI deep-dive analysis
+    4. Calls interactive_deep_dive() when issues are found
+    """
+    print(f"\n{BOLD}🏗️  Architectural Health Analysis{RESET}")
+    print(f"{GREY}==================================={RESET}")
+    
+    # Get file data if not provided
+    if file_data is None:
+        file_data = collect_all_project_files(directory, config=config)
+    
+    # Initialize architectural sniffer
+    sniffer = ArchitecturalSniffer(directory, config)
+    
+    # Run architectural analysis
+    smells = sniffer.analyze_architecture(file_data['all_files'])
+    
+    # Display results
+    if not smells:
+        print(f"\n{GREEN}✅ No architectural issues detected! Your project structure looks healthy.{RESET}")
+        return
+    
+    # Display architectural issues summary
+    print(f"\n{RED}Found {len(smells)} architectural issues.{RESET}")
+    
+    # Group smells by type for better organization
+    smell_groups = defaultdict(list)
+    for smell in smells:
+        smell_groups[smell['type']].append(smell)
+    
+    # Display numbered list of issues
+    issues = []
+    index = 1
+    
+    for smell_type, smell_list in smell_groups.items():
+        emoji_type = ARCHITECTURAL_SMELLS.get(smell_type, '⚠️  ISSUE')
+        
+        for smell in smell_list:
+            issues.append(smell)
+            
+            # Extract file name for display
+            if 'file' in smell:
+                file_name = Path(smell['file']).name
+            elif 'files' in smell:
+                file_name = f"{len(smell['files'])} files"
+            else:
+                file_name = "Unknown"
+            
+            print(f"{index}. {emoji_type}: '{file_name}'")
+            index += 1
+    
+    # Prompt for interactive analysis
+    print(f"\n{BOLD}Enter number to deep-dive with AI, or 'q' to quit:{RESET}")
+    
+    try:
+        choice = input("> ").strip().lower()
+        
+        if choice == 'q' or choice == 'quit':
+            print(f"{GREY}Skipping deep-dive analysis.{RESET}")
+            return
+        
+        try:
+            choice_num = int(choice)
+            if 1 <= choice_num <= len(issues):
+                selected_smell = issues[choice_num - 1]
+                
+                # Extract file name for the sending message
+                if 'file' in selected_smell:
+                    file_name = Path(selected_smell['file']).name
+                elif 'files' in selected_smell:
+                    file_name = f"{len(selected_smell['files'])} files"
+                else:
+                    file_name = "selected issue"
+                
+                print(f"\n{GREY}-> Sending '{file_name}' to LLM for review...{RESET}")
+                
+                # Call the existing interactive deep dive with just the selected issue
+                interactive_deep_dive([selected_smell], directory, config)
+            else:
+                print(f"{RED}Invalid choice. Please enter a number between 1 and {len(issues)}.{RESET}")
+        except ValueError:
+            print(f"{RED}Invalid input. Please enter a number or 'q' to quit.{RESET}")
+            
+    except KeyboardInterrupt:
+        print(f"\n{GREY}Skipping deep-dive analysis.{RESET}")
 
 # =============================================================================
 # MAIN ENTRY POINT
