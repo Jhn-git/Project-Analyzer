@@ -6,16 +6,6 @@ Perfect for developers onboarding to a new project, conducting a tech-debt audit
 
 ---
 
-### A Note on the Monolith
-
-> Yes, `analyzer_main.py` is a single, massive file.
->
-> And yes, the analyzer flags its own size as a `(!!! TOO LARGE !!!)` issue every time it runs. We consider this a feature, not a bug.
->
-> It is the ultimate, unbiased proof that the sniffer works. The cobbler's children have no shoes, and our analyzer is its own first and most honest user.
-
----
-
 ## ✨ Key Features
 
 *   **🕵️‍♂️ Architectural Smell Detection**: Automatically "sniffs" your codebase for common architectural problems:
