@@ -52,7 +52,7 @@ def test_installation():
     """Test if the installation works"""
     print("\n🧪 Testing installation...")
     try:
-        result = subprocess.run([sys.executable, "project_analyzer.py", "--help"], 
+        result = subprocess.run([sys.executable, "analyzer_main.py", "--help"],
                               capture_output=True, text=True)
         if result.returncode == 0:
             print("✅ Project Analyzer is working correctly")
@@ -84,9 +84,9 @@ def main():
     
     print("\n🎉 Setup completed successfully!")
     print("\n📖 Quick start:")
-    print("   python project_analyzer.py")
-    print("   python project_analyzer.py --markdown")
-    print("   python project_analyzer.py --help")
+    print("   python analyzer_main.py .")
+    print("   python analyzer_main.py . --markdown")
+    print("   python analyzer_main.py --help")
     print("\n🔗 Don't forget to:")
     print("   1. Add your Google API key to .env for AI features")
     print("   2. Check out README.md for detailed usage")

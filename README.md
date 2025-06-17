@@ -8,7 +8,7 @@ Perfect for developers onboarding to a new project, conducting a tech-debt audit
 
 ### A Note on the Monolith
 
-> Yes, `project_analyzer.py` is a single, massive file.
+> Yes, `analyzer_main.py` is a single, massive file.
 >
 > And yes, the analyzer flags its own size as a `(!!! TOO LARGE !!!)` issue every time it runs. We consider this a feature, not a bug.
 >
@@ -75,19 +75,19 @@ The analyzer is designed to be a "sniffer" first. The default command gives you 
 
 ```bash
 # Run the default architectural analysis
-python project_analyzer.py
+python analyzer_main.py .
 ```
 After listing the issues, it will prompt you for an **interactive AI deep dive**.
 
 ```bash
 # Get a visual tree of the entire project
-python project_analyzer.py --tree
+python analyzer_main.py . --tree
 
 # Run all analyses: architecture, coverage, and file tree
-python project_analyzer.py --full
+python analyzer_main.py . --full
 
 # Generate a standalone HTML report
-python project_analyzer.py --html-report
+python analyzer_main.py . --html-report
 ```
 
 ## 📖 Detailed Usage & Configuration

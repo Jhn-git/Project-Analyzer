@@ -34,7 +34,7 @@ Thank you for your interest in contributing to Project Analyzer! This document p
 
 5. **Test the installation:**
    ```bash
-   python project_analyzer.py --help
+   python analyzer_main.py --help
    ```
 
 ## 🐛 Reporting Issues
@@ -81,15 +81,15 @@ We welcome feature suggestions! Please:
 3. **Test your changes:**
    ```bash
    # Test basic functionality
-   python project_analyzer.py
+   python analyzer_main.py .
    
    # Test different output formats
-   python project_analyzer.py --markdown
-   python project_analyzer.py --json
+   python analyzer_main.py . --markdown
+   python analyzer_main.py . --json
    
    # Test AI features (if applicable)
-   python project_analyzer.py --summarize
-   python project_analyzer.py --review
+   python analyzer_main.py . --summarize
+   python analyzer_main.py . --review
    ```
 
 4. **Commit your changes:**

@@ -28,15 +28,15 @@ jobs:
     
     - name: Test basic functionality
       run: |
-        python project_analyzer.py --help
-        python project_analyzer.py --json
-        python list_gemini_models.py || echo "Skipping Gemini test (no API key)"
+        python analyzer_main.py --help
+        python analyzer_main.py . --json
+        python scripts/list_gemini_models.py || echo "Skipping Gemini test (no API key)"
     
     - name: Test on sample project structure
       run: |
         mkdir -p test_project/src
         echo "print('hello')" > test_project/src/main.py
         echo "# Test project" > test_project/README.md
-        cd test_project && python ../project_analyzer.py
-        cd test_project && python ../project_analyzer.py --markdown
-        cd test_project && python ../project_analyzer.py --json
+        python analyzer_main.py test_project
+        python analyzer_main.py test_project --markdown
+        python analyzer_main.py test_project --json

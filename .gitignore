@@ -150,3 +150,6 @@ test_output/
 *.temp
 .analyzer-cache.json
 .github/instructions/*
+
+# NPM cache
+/.npm-cache/

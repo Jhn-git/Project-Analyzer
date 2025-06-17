@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Major Refactoring**: Broke the monolithic `analyzer_main.py` file into a modular package structure for better maintainability and extensibility
+- **Package Structure**: Reorganized code into specialized modules:
+  - `analyzer/config.py` - Configuration management and loading
+  - `analyzer/utils.py` - Core utility functions and file operations
+  - `analyzer/dependency_analysis.py` - Dependency graph analysis and import parsing
+  - `analyzer/architectural_analysis.py` - Architectural pattern detection and code smells
+  - `analyzer/ai_analysis.py` - AI-powered code review and summarization
+  - `analyzer/coverage_analysis.py` - Test coverage analysis (Jest support)
+  - `analyzer/report_generators.py` - Output formatting (HTML, Markdown, JSON)
+  - `analyzer/interactive.py` - Interactive deep-dive analysis mode
+  - `analyzer/main.py` - Main application logic and CLI interface
+
 ### Added
 - **Refined Ghost File Detection**: Added `untestable_patterns` configuration to exclude files that shouldn't be tested (scripts, configs, etc.) from ghost file analysis, reducing noise
 - **Contextualized Blast Radius Alerts**: Added `utility_patterns` configuration to differentiate between utility files (expected high imports) and core business logic files (concerning high imports)  
@@ -14,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **High Churn Detection**: New sniffer that identifies files with high commit frequency, indicating potential instability or bug hotspots
 - **Enhanced Configuration**: Comprehensive `.analyzer-config.example.json` with all new configuration options
 - **Smarter Default Behavior**: Running the analyzer without flags now defaults to architectural analysis (the "alerter" mode) instead of file tree display
+- **Modular Architecture**: Clean separation of concerns with each module handling specific functionality
 
 ### Improved  
 - **Ghost File Analysis**: Now focuses primarily on files within configured source directories and respects untestable patterns, dramatically reducing false positives
@@ -32,8 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved pattern matching for file classification and filtering
 
 ### Migration Notes
-- The default behavior has changed: `python project_analyzer.py` now runs architectural analysis instead of showing file tree
-- Use `python project_analyzer.py --tree` to display the file tree structure
+- The default behavior has changed: `python analyzer_main.py .` now runs architectural analysis instead of showing file tree
+- Use `python analyzer_main.py . --tree` to display the file tree structure
 - Consider creating a `.analyzer-config.json` file based on the example to customize the new filtering options
 
 ---

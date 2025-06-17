@@ -28,7 +28,7 @@ The setup script will guide you through installing dependencies and adding your 
 This is the primary function of the tool. It sniffs for deep architectural issues and then prompts you for an AI deep-dive.
 
 ```bash
-python project_analyzer.py
+python analyzer_main.py .
 ```
 **Output Example:**
 ```
@@ -47,7 +47,7 @@ Enter number to deep-dive with AI, or 'q' to quit:
 Use the `--tree` flag to get a visual representation of your project structure, complete with file size warnings.
 
 ```bash
-python project_analyzer.py --tree
+python analyzer_main.py . --tree
 ```
 **Output Example:**
 ```
@@ -63,14 +63,14 @@ my-project/
 For Jest-based projects, add the `--coverage` flag to any command to include a test coverage summary in the report.
 
 ```bash
-python project_analyzer.py --full --coverage
+python analyzer_main.py . --full --coverage
 ```
 
 ### 🧩 Run All Analyses
 The `--full` flag runs the architectural analysis, displays the file tree, and includes test coverage all in one command.
 
 ```bash
-python project_analyzer.py --full
+python analyzer_main.py . --full
 ```
 
 ## 📄 Generating Reports
@@ -79,13 +79,13 @@ Generate reports for documentation or automation.
 
 ```bash
 # Markdown report (great for pull requests or wikis)
-python project_analyzer.py --full --markdown > report.md
+python analyzer_main.py . --full --markdown > report.md
 
 # JSON output (for integration with other tools)
-python project_analyzer.py --full --json > report.json
+python analyzer_main.py . --full --json > report.json
 
 # HTML report (a self-contained, viewable file)
-python project_analyzer.py --full --html-report
+python analyzer_main.py . --full --html-report
 ```
 
 ## 🧠 Standalone AI Features
@@ -93,10 +93,10 @@ These commands bypass the architectural analysis and run the AI directly on the 
 
 ```bash
 # Get a high-level summary of key files
-python project_analyzer.py --summarize
+python analyzer_main.py . --summarize
 
 # Get a detailed code review with refactoring suggestions
-python project_analyzer.py --review
+python analyzer_main.py . --review
 ```
 
 ## ⚙️ Configuration
