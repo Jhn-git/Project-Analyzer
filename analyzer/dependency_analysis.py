@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from collections import defaultdict, deque
 
+from .utils import read_file_content
+
 # =============================================================================
 # DEPENDENCY ANALYSIS CLASSES
 # =============================================================================
@@ -71,66 +73,41 @@ class ImportParser:
     def parse_python_imports(file_path, project_root):
         """Parse Python import statements."""
         imports = set()
-        try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-                
-            # Handle different Python import patterns
-            patterns = [
-                r'^\s*from\s+([^\s]+)\s+import',  # from module import
-                r'^\s*import\s+([^\s,]+)',        # import module
-            ]
-            
-            for pattern in patterns:
-                matches = re.findall(pattern, content, re.MULTILINE)
-                imports.update(matches)
-                
-        except Exception:
-            pass
+        content = read_file_content(file_path)
+        if not content:
+            return []
+
+        # Handle different Python import patterns
+        patterns = [
+            r'^\s*from\s+([^\s]+)\s+import',  # from module import
+            r'^\s*import\s+([^\s,]+)',        # import module
+        ]
         
-        return list(imports)
-    
-    @staticmethod
-    def _parse_python_imports_regex(file_path):
-        """Parse Python imports using regex patterns."""
-        imports = set()
-        try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith('from ') and ' import ' in line:
-                        module = line.split('from ')[1].split(' import ')[0].strip()
-                        imports.add(module)
-                    elif line.startswith('import '):
-                        modules = line[7:].split(',')
-                        for module in modules:
-                            imports.add(module.strip().split(' as ')[0])
-        except Exception:
-            pass
+        for pattern in patterns:
+            matches = re.findall(pattern, content, re.MULTILINE)
+            imports.update(matches)
+            
         return list(imports)
     
     @staticmethod
     def parse_javascript_imports(file_path, project_root):
         """Parse JavaScript/TypeScript import statements."""
         imports = set()
-        try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-                
-            # Handle different JS/TS import patterns
-            patterns = [
-                r'import\s+.*?\s+from\s+[\'"]([^\'"]+)[\'"]',  # import from
-                r'import\s+[\'"]([^\'"]+)[\'"]',               # import
-                r'require\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)',   # require
-            ]
-            
-            for pattern in patterns:
-                matches = re.findall(pattern, content)
-                imports.update(matches)
-                
-        except Exception:
-            pass
+        content = read_file_content(file_path)
+        if not content:
+            return []
+
+        # Handle different JS/TS import patterns
+        patterns = [
+            r'import\s+.*?\s+from\s+[\'"]([^\'"]+)[\'"]',  # import from
+            r'import\s+[\'"]([^\'"]+)[\'"]',               # import
+            r'require\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)',   # require
+        ]
         
+        for pattern in patterns:
+            matches = re.findall(pattern, content)
+            imports.update(matches)
+            
         return list(imports)
     
     @staticmethod

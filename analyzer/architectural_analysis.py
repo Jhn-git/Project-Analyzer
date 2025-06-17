@@ -68,7 +68,16 @@ class ArchitecturalSniffer:
         # Ensure all file_paths are absolute and within the project root
         absolute_file_paths = []
         for p in file_paths:
-            abs_p = Path(p) if Path(p).is_absolute() else self.project_root / p
+            if Path(p).is_absolute():
+                abs_p = Path(p)
+            else:
+                # Use the resolver to get a consistent absolute path
+                resolved_p = self.workspace_resolver.get_absolute_path(p)
+                if not resolved_p:
+                    print(f"Warning: Could not resolve path for {p}. Skipping.")
+                    continue
+                abs_p = Path(resolved_p)
+
             if not self.workspace_resolver.is_path_in_project(str(abs_p)):
                 print(f"Warning: File {p} is not within the detected project root {self.project_root}. Skipping.")
                 continue

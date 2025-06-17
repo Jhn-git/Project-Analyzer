@@ -52,6 +52,22 @@ def is_binary_file(file_path):
     except (OSError, IOError):
         return True
 
+def read_file_content(file_path: str) -> str:
+    """
+    Reads the content of a file with robust error handling.
+
+    Args:
+        file_path (str): The path to the file.
+
+    Returns:
+        str: The content of the file, or an empty string if reading fails.
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            return f.read()
+    except (FileNotFoundError, IOError, UnicodeDecodeError):
+        return ""
+
 # =============================================================================
 # FILE FILTERING AND GITIGNORE HANDLING
 # =============================================================================

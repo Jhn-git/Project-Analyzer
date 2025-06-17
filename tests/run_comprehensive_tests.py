@@ -14,8 +14,8 @@ import time
 from pathlib import Path
 import importlib.util
 
-# Add analyzer to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'analyzer'))
+# Add project root to path to allow for `from analyzer import ...`
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Color codes for output
 RESET = "\033[0m"
@@ -231,12 +231,8 @@ def run_validation_checks():
     # Check 3: Verify file classification works for common files
     print("Testing file classification...")
     try:
-        config = {
-            "source_file_patterns": [".py"],
-            "documentation_file_patterns": [".md", "README", "LICENSE"],
-            "config_file_patterns": [".json", ".yaml", ".env"]
-        }
-        classifier = FileClassifier(config)
+        from analyzer.config import DEFAULT_CONFIG
+        classifier = FileClassifier(DEFAULT_CONFIG)
         
         test_cases = [
             ("README.md", "documentation"),
@@ -249,7 +245,7 @@ def run_validation_checks():
             classifications = classifier.classify_file(file_path)
             if expected_type not in classifications:
                 all_passed = False
-                break
+                print(f"    - Failed to classify '{file_path}' as '{expected_type}'. Got: {classifications}")
         
         if all_passed:
             print(f"  {GREEN}✅ File classification works correctly{RESET}")
@@ -275,7 +271,7 @@ def main():
     overall_result.start_time = time.time()
     
     # Define test suites
-    test_dir = Path(__file__).parent / "tests"
+    test_dir = Path(__file__).parent
     test_suites = [
         (test_dir / "test_file_classification.py", "File Classification Tests"),
         (test_dir / "test_output_formatting.py", "Output Formatting Tests"),
@@ -309,8 +305,17 @@ def main():
     if integration_test_path.exists():
         try:
             import subprocess
-            result = subprocess.run([sys.executable, str(integration_test_path)], 
-                                  capture_output=True, text=True, timeout=60)
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8" # For child process
+            result = subprocess.run(
+                [sys.executable, str(integration_test_path)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=env,
+                encoding='utf-8',
+                errors='replace'
+            )
             if result.returncode == 0:
                 print(f"{GREEN}✅ Existing integration test passed{RESET}")
             else:

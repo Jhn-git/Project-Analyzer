@@ -4,7 +4,7 @@
 
 from pathlib import Path
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import sys
 from typing import List, Dict, Any
 
@@ -73,7 +73,7 @@ class GitAnalyzer:
 
         smells = []
         threshold_days = self.config.get('stale_logic_threshold_days', DEFAULT_CONFIG['stale_logic_threshold_days'])
-        cutoff_date = datetime.now() - timedelta(days=threshold_days)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=threshold_days)
 
         for file_path in file_paths:
             classifications = self.file_classifier.classify_file(str(file_path))
@@ -81,7 +81,7 @@ class GitAnalyzer:
                 try:
                     # Get the last commit date for the file
                     last_commit = next(self.repo.iter_commits(paths=str(file_path), max_count=1))
-                    last_commit_date = last_commit.committed_datetime.astimezone()
+                    last_commit_date = last_commit.committed_datetime
 
                     if last_commit_date < cutoff_date:
                         smells.append(create_smell(

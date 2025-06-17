@@ -12,8 +12,8 @@ import tempfile
 import shutil
 from pathlib import Path
 
-# Add the analyzer module to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'analyzer'))
+# Add project root to path to allow for `from analyzer import ...`
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 def test_imports():
     """Test that all refactored modules can be imported without errors."""

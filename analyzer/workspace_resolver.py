@@ -56,11 +56,11 @@ class WorkspaceResolver:
         self.project_root = None
         return None
 
-    def resolve_path(self, relative_path: str) -> Optional[str]:
+    def get_absolute_path(self, relative_path: str) -> Optional[str]:
         """
-        Resolves a relative path to an absolute path within the detected project root.
+        Constructs an absolute path from a path relative to the project root.
 
-        Requires `find_project_root` to have been called successfully.
+        This is the preferred method for creating absolute paths to ensure consistency.
 
         Args:
             relative_path (str): The path relative to the project root.
@@ -71,6 +71,23 @@ class WorkspaceResolver:
         if self.project_root:
             return os.path.join(self.project_root, relative_path)
         return None
+
+    def resolve_path(self, relative_path: str) -> Optional[str]:
+        """
+        Resolves a relative path to an absolute path within the detected project root.
+
+        .. deprecated:: 0.2.0
+           Use `get_absolute_path` instead for clarity.
+
+        Requires `find_project_root` to have been called successfully.
+
+        Args:
+            relative_path (str): The path relative to the project root.
+
+        Returns:
+            Optional[str]: The absolute path if the project root is known, otherwise None.
+        """
+        return self.get_absolute_path(relative_path)
 
     def get_project_root(self) -> Optional[str]:
         """
@@ -161,9 +178,20 @@ class WorkspaceResolver:
                 return None # Path resolution failed
             return None
 
-        # 2. Try absolute imports from configured source roots
+        # 2. Try imports relative to the current file's directory (same directory imports)
         module_path = Path(import_name.replace('.', os.sep))
+        current_dir = from_file.parent
+        
+        # Check in the same directory first
+        potential_path = current_dir / module_path
+        for ext in script_exts:
+            if potential_path.with_suffix(ext).is_file():
+                return potential_path.with_suffix(ext)
+        # Check for package imports
+        if (potential_path / "__init__.py").is_file():
+            return (potential_path / "__init__.py")
 
+        # 3. Try absolute imports from configured source roots
         for source_dir in source_dirs:
             potential_path = (Path(self.project_root) / source_dir / module_path)
             for ext in script_exts:
@@ -172,5 +200,14 @@ class WorkspaceResolver:
             # Check for package imports (e.g., `import my_package` where my_package is a directory)
             if (potential_path / "__init__.py").is_file():
                 return (potential_path / "__init__.py")
+
+        # 4. Try imports from project root
+        potential_path = Path(self.project_root) / module_path
+        for ext in script_exts:
+            if potential_path.with_suffix(ext).is_file():
+                return potential_path.with_suffix(ext)
+        # Check for package imports
+        if (potential_path / "__init__.py").is_file():
+            return (potential_path / "__init__.py")
 
         return None

@@ -153,3 +153,5 @@ test_output/
 
 # NPM cache
 /.npm-cache/
+
+.npm-cache/

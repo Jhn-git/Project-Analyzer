@@ -96,6 +96,7 @@ class PatternAnalyzer:
     def _detect_cyclic_dependencies(self, graph: Dict[str, List[str]]) -> List[List[str]]:
         """
         Detects cyclic dependencies in a directed graph using DFS.
+        Uses proper cycle detection that finds strongly connected components.
 
         Args:
             graph (Dict[str, List[str]]): The dependency graph.
@@ -103,34 +104,52 @@ class PatternAnalyzer:
         Returns:
             List[List[str]]: A list of detected cycles, where each cycle is a list of nodes.
         """
+        visited = set()
+        recursion_stack = set()
         cycles = []
         
-        for node in graph:
-            # Using a stack for DFS, storing (node, path)
-            stack = [(node, [node])]
+        def dfs(node, path):
+            if node in recursion_stack:
+                # Found a back edge - extract the cycle
+                cycle_start_idx = path.index(node)
+                cycle = path[cycle_start_idx:] + [node]
+                cycles.append(cycle)
+                return
             
-            while stack:
-                current_node, path = stack.pop()
+            if node in visited:
+                return
                 
-                for neighbor in graph.get(current_node, []):
-                    if neighbor == node:
-                        # Cycle detected
-                        cycles.append(path + [neighbor])
-                    elif neighbor not in path:
-                        stack.append((neighbor, path + [neighbor]))
-                        
-        # Post-process to remove duplicate cycles (e.g., A->B->A and B->A->B)
+            visited.add(node)
+            recursion_stack.add(node)
+            path.append(node)
+            
+            for neighbor in graph.get(node, []):
+                dfs(neighbor, path[:])  # Pass a copy of the path
+            
+            recursion_stack.remove(node)
+            path.pop()
+        
+        # Only start DFS from unvisited nodes to avoid duplicates
+        for node in graph:
+            if node not in visited:
+                dfs(node, [])
+        
+        # Remove duplicate cycles by normalizing them
         unique_cycles = []
         seen_cycles = set()
         
         for cycle in cycles:
-            # Normalize the cycle by sorting the nodes
-            # This makes it easier to identify duplicates
-            sorted_cycle = tuple(sorted(cycle))
-            if sorted_cycle not in seen_cycles:
-                unique_cycles.append(cycle)
-                seen_cycles.add(sorted_cycle)
+            if len(cycle) <= 1:
+                continue
                 
+            # Normalize cycle by finding the lexicographically smallest rotation
+            min_rotation = min(cycle[i:] + cycle[:i] for i in range(len(cycle) - 1))
+            cycle_key = tuple(min_rotation[:-1])  # Remove duplicate last element
+            
+            if cycle_key not in seen_cycles:
+                unique_cycles.append(cycle[:-1])  # Remove duplicate last element
+                seen_cycles.add(cycle_key)
+        
         return unique_cycles
 
     def _is_monolithic(self, code_metrics: Dict[str, Any], file_classifications: Dict[str, List[str]]) -> bool:
