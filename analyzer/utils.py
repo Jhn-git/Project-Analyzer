@@ -157,42 +157,6 @@ def get_project_hash(file_paths):
     combined = '|'.join(file_hashes)
     return hashlib.md5(combined.encode()).hexdigest()
 
-def load_cached_dependency_graph(project_hash):
-    """Load cached dependency graph if it exists and is valid."""
-    from .dependency_analysis import DependencyGraph
-    
-    cache = load_cache()
-    cache_key = f"dependency_graph:{project_hash}"
-    cached_data = cache.get(cache_key)
-    
-    if cached_data:
-        try:
-            # Check if cache is recent (less than 1 hour old)
-            if time.time() - cached_data.get('timestamp', 0) < 3600:
-                # Reconstruct DependencyGraph object from cached data
-                graph = DependencyGraph()
-                imports_data = cached_data.get('imports', {})
-                for from_file, to_files in imports_data.items():
-                    for to_file in to_files:
-                        graph.add_dependency(from_file, to_file)
-                return graph
-        except Exception:
-            pass
-    return None
-
-def save_dependency_graph_cache(dependency_graph, project_hash):
-    """Save dependency graph to cache."""
-    cache = load_cache()
-    cache_key = f"dependency_graph:{project_hash}"
-    
-    # Convert graph to serializable format
-    cache_data = {
-        'imports': {k: list(v) for k, v in dependency_graph.imports.items()},
-        'timestamp': time.time()
-    }
-    
-    cache[cache_key] = cache_data
-    save_cache(cache)
 
 def clear_cache():
     """Clear the analysis cache."""

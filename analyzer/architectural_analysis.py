@@ -8,8 +8,8 @@ import os
 from typing import List, Dict, Any, Optional
 
 # --- Main project dependencies ---
-from .dependency_analysis import DependencyGraph, ImportParser
-from .utils import load_cache, save_cache, get_project_hash, load_cached_dependency_graph, save_dependency_graph_cache
+from .dependency_analysis import DependencyGraph, ImportParser, load_cached_dependency_graph, save_dependency_graph_cache
+from .utils import load_cache, save_cache, get_project_hash
 from .config import get_configured_source_dirs, SCRIPT_EXTS, load_config
 
 # --- New/Refactored module imports ---
